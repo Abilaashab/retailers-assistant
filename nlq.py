@@ -54,20 +54,17 @@ Relationships:
 - sales_transactions."EmployeeID" → employee_performance."EmployeeID"
 - sales_transactions."CustomerID" → customer_info."CustomerID"
 
+Query Guidelines:
+1. Always join to customer_info to get customer names when CustomerID is involved
+2. Always join to employee_performance to get employee names when EmployeeID is involved
+3. Prefer human-readable names over IDs in results
+4. Use table aliases for better readability (e.g., 'c' for customer_info, 'e' for employee_performance, 's' for sales_transactions)
+
 Important Notes:
 1. Always use double quotes around column and table names to preserve case
 2. Use CURRENT_DATE for current date in queries
 3. When joining tables, use the exact column names with proper case
 4. For text searches, use ILIKE for case-insensitive matching
-5. Example of a correct query:
-   SELECT c."Name", SUM(s."Quantity" * s."Price") as total
-   FROM "customer_info" c
-   JOIN "sales_transactions" s ON c."CustomerID" = s."CustomerID"
-   GROUP BY c."CustomerID", c."Name"
-   ORDER BY total DESC
-   LIMIT 5
-
-Remember to always use double quotes around identifiers to match the exact case in the database.
 """
 
 def generate_sql_query(natural_language_query: str) -> Dict[str, Any]:
@@ -80,16 +77,36 @@ def generate_sql_query(natural_language_query: str) -> Dict[str, Any]:
     Returns:
         dict: A dictionary containing the SQL query and any additional information
     """
+    from datetime import datetime, timezone
+    
+    # Get current date and time with timezone info
+    current_dt = datetime.now(timezone.utc)
+    current_date = current_dt.strftime('%Y-%m-%d')
+    current_time = current_dt.strftime('%H:%M:%S %Z')
+    current_year = current_dt.year
+    
     # Create a prompt for the model
     prompt = f"""You are a senior database administrator. Convert the following natural language query into a PostgreSQL SQL query.
     
     {SCHEMA_INFO}
+    
+    Current Date Context:
+    - Current UTC Date: {current_date}
+    - Current UTC Time: {current_time}
+    - Current Year: {current_year}
+    
+    Date Handling Guidelines:
+    1. Use the current date ({current_date}) as reference for relative dates
+    2. When only month/day is specified, use the current year ({current_year})
+    3. For relative terms (e.g., "last week"), calculate from current date
+    4. Always include the year in date literals for clarity
     
     Instructions:
     1. Only return valid PostgreSQL SQL
     2. Do not include any explanations or markdown formatting
     3. If the query is ambiguous, make reasonable assumptions and state them in the notes
     4. For date ranges, use current date if not specified
+    5. Include the year in all date literals
     
     Natural Language Query: {natural_language_query}
     
