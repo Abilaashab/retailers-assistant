@@ -11,6 +11,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from dotenv import load_dotenv
 from nlq import generate_sql_query, execute_nl_query
 from weather_agent import WeatherAgent
+from pa_agent import PersonalAssistantAgent
 import decimal
 import traceback
 from datetime import datetime
@@ -36,6 +37,7 @@ class AgentType(Enum):
     SUPERVISOR = "supervisor"
     DB_QUERY = "db_query_agent"
     WEATHER = "weather_agent"
+    PERSONAL_ASSISTANT = "personal_assistant"
 
 # Enhanced weather query analysis dataclass
 @dataclass
@@ -58,7 +60,7 @@ class AgentConfig:
 # Improved state schema with better typing
 class AgentState(TypedDict):
     messages: Annotated[List[Union[HumanMessage, AIMessage]], lambda x, y: x + y]
-    next: Literal["supervisor", "db_query_agent", "weather_agent", END]
+    next: Literal["supervisor", "db_query_agent", "weather_agent", "personal_assistant", END]
     query: str
     selected_agent: str
     agent_output: Dict[str, Any]
@@ -255,6 +257,7 @@ class SupervisorAgent:
             temperature=0,
             max_retries=3
         )
+        self.pa_agent = PersonalAssistantAgent()
         
         self.agents = {
             AgentType.DB_QUERY.value: AgentConfig(
@@ -270,27 +273,91 @@ class SupervisorAgent:
                 keywords=["weather", "temperature", "rain", "snow", "sunny", "cloudy", "forecast", 
                          "hot", "cold", "humid", "°c", "°f", "degrees", "climate", "conditions"],
                 priority=2
+            ),
+            AgentType.PERSONAL_ASSISTANT.value: AgentConfig(
+                name="personal_assistant",
+                description="Handles general queries and conversations",
+                keywords=[],
+                priority=0  # Default fallback
             )
         }
     
     def route_query(self, query: str) -> Dict[str, Any]:
         """Enhanced routing logic with LLM assistance."""
         try:
+            # First, check if this is a greeting or general query
+            if self._is_general_query(query):
+                return {
+                    "agent": AgentType.PERSONAL_ASSISTANT.value,
+                    "confidence": 0.9,
+                    "reasoning": "General query or greeting detected",
+                    "method": "direct"
+                }
+                
             # Use LLM for intelligent routing
-            return self._llm_route_query(query)
+            result = self._llm_route_query(query)
+            
+            # If confidence is too low, default to personal assistant
+            if result.get("confidence", 0) < 0.4:
+                return {
+                    "agent": AgentType.PERSONAL_ASSISTANT.value,
+                    "confidence": 0.7,
+                    "reasoning": f"Low confidence in agent selection: {result.get('reasoning', 'No reasoning provided')}",
+                    "method": "fallback"
+                }
+                
+            return result
+            
         except Exception as e:
             logger.error(f"Error in routing: {str(e)}")
+            # Default to personal assistant on error
             return {
-                "agent": AgentType.DB_QUERY.value,
-                "confidence": 0.1,
-                "reasoning": f"Fallback due to routing error: {str(e)}",
-                "method": "fallback"
+                "agent": AgentType.PERSONAL_ASSISTANT.value,
+                "confidence": 0.6,
+                "reasoning": f"Fallback to personal assistant due to error: {str(e)}",
+                "method": "error_fallback"
             }
+            
+    def _is_general_query(self, query: str) -> bool:
+        """Check if the query is a general conversation or greeting."""
+        if not query or not query.strip():
+            return True
+            
+        query_lower = query.lower().strip()
+        
+        # Check for goodbyes first
+        goodbye_phrases = ["goodbye", "bye", "see you", "see ya", "take care", "farewell", "have a good", "have a nice"]
+        if any(phrase in query_lower for phrase in goodbye_phrases):
+            return True
+            
+        # Check for greetings
+        greetings = ["hello", "hi", "hey", "greetings", "good morning", "good afternoon", "good evening"]
+        if any(greeting in query_lower for greeting in greetings):
+            return True
+            
+        # Check for thanks
+        if any(phrase in query_lower for phrase in ["thank", "thanks", "appreciate"]):
+            return True
+            
+        # Check for capabilities questions
+        if any(phrase in query_lower for phrase in ["what can you do", "help", "capabilities", "who are you"]):
+            return True
+            
+        # Check for general conversation
+        general_phrases = [
+            "how are you", "what's up", "how's it going", "how do you do",
+            "tell me about yourself", "who made you", "what are you",
+            "your name"
+        ]
+        if any(phrase in query_lower for phrase in general_phrases):
+            return True
+            
+        return False
     
     def _llm_route_query(self, query: str) -> Dict[str, Any]:
         """Use LLM for routing decisions."""
         agent_descriptions = "\n".join([
-            f"- {name}: {config.description}"
+            f"- {name}: {config.description}. Keywords: {', '.join(config.keywords) if config.keywords else 'N/A'}"
             for name, config in self.agents.items()
         ])
         
@@ -302,15 +369,18 @@ Available agents:
 User query: "{query}"
 
 Instructions:
-- Route weather-related queries (temperature, rain, humidity, weather conditions, etc.) to weather_agent
-- Route data/database queries (sales, users, analytics, reports, etc.) to db_query_agent
-- Weather queries don't need to mention specific locations - the weather agent handles location detection
+1. Route weather-related queries (temperature, rain, humidity, weather conditions, etc.) to weather_agent
+2. Route data/database queries (sales, users, analytics, reports, etc.) to db_query_agent
+3. For all other general queries, conversations, greetings, or when unsure, use personal_assistant
+4. Weather queries don't need to mention specific locations - the weather agent handles location detection
+5. If the query is a greeting, general question, or doesn't fit other categories, use personal_assistant
+6. Be conservative - if you're not highly confident (>=0.8) about db_query_agent or weather_agent, default to personal_assistant
 
 Respond with JSON:
 {{
-    "agent": "agent_name",
-    "confidence": 0.8,
-    "reasoning": "Brief explanation"
+    "agent": "agent_name",  // One of: db_query_agent, weather_agent, or personal_assistant
+    "confidence": 0.8,  // Confidence score between 0 and 1
+    "reasoning": "Brief explanation of why this agent was chosen"
 }}"""
 
         try:
@@ -353,12 +423,15 @@ def supervisor_node(state: AgentState) -> Dict[str, Any]:
         query = state["messages"][-1].content if hasattr(state["messages"][-1], 'content') else str(state["messages"][-1])
     
     if not query:
-        logger.warning("No query found, defaulting to db_query_agent")
+        logger.warning("No query found, defaulting to personal assistant")
         return {
-            "next": AgentType.DB_QUERY.value,
-            "selected_agent": AgentType.DB_QUERY.value,
-            "routing_confidence": 0.1,
-            "context": {"routing_method": "fallback"}
+            "next": AgentType.PERSONAL_ASSISTANT.value,
+            "selected_agent": AgentType.PERSONAL_ASSISTANT.value,
+            "routing_confidence": 0.9,
+            "context": {
+                "routing_method": "fallback",
+                "routing_reasoning": "No query provided, defaulting to personal assistant"
+            }
         }
     
     # Route the query
@@ -478,6 +551,38 @@ def enhanced_weather_agent_node(state: AgentState) -> Dict[str, Any]:
             "error": error_msg
         }
 
+def personal_assistant_node(state: AgentState) -> Dict[str, Any]:
+    """Personal assistant node for general queries and conversations."""
+    try:
+        query = state.get("query", "")
+        logger.info(f"Personal Assistant processing: {query}")
+        
+        # Initialize the personal assistant
+        supervisor = SupervisorAgent()
+        
+        # Process the query with the personal assistant
+        result = supervisor.pa_agent.process_query(query)
+        
+        return {
+            "agent_output": {
+                "success": result["success"],
+                "response": result["response"],
+                "type": result["type"]
+            }
+        }
+        
+    except Exception as e:
+        error_msg = f"Error in personal assistant: {str(e)}"
+        logger.error(f"{error_msg}\n{traceback.format_exc()}")
+        return {
+            "agent_output": {
+                "success": False,
+                "error": error_msg,
+                "type": "system_error"
+            },
+            "error": error_msg
+        }
+
 def enhanced_final_response_node(state: AgentState) -> Dict[str, str]:
     """Enhanced final response formatting with intelligent parameter selection."""
     try:
@@ -500,10 +605,20 @@ def enhanced_final_response_node(state: AgentState) -> Dict[str, str]:
             else:
                 return {"final_answer": f"⚠️ {error_msg}"}
         
-        # Format successful responses
+        # Format successful responses based on the selected agent
         if selected_agent == AgentType.WEATHER.value:
             return format_enhanced_weather_response(query, agent_output.get("data", {}), weather_analysis)
+        elif selected_agent == AgentType.PERSONAL_ASSISTANT.value:
+            # For personal assistant, check if this is a goodbye message
+            response = {
+                "final_answer": agent_output.get("response", "I'm not sure how to respond to that.")
+            }
+            # If this is a goodbye message from the personal assistant, add the exit flag
+            if agent_output.get("type") == "goodbye" or agent_output.get("should_exit", False):
+                response["should_exit"] = True
+            return response
         else:
+            # Default to database response for any other agent
             return format_database_response(query, agent_output.get("data"))
             
     except Exception as e:
@@ -606,6 +721,7 @@ def create_enhanced_workflow() -> StateGraph:
     workflow.add_node("supervisor", supervisor_node)
     workflow.add_node("db_query_agent", db_query_agent_node)
     workflow.add_node("weather_agent", enhanced_weather_agent_node)
+    workflow.add_node("personal_assistant", personal_assistant_node)
     workflow.add_node("final_response", enhanced_final_response_node)
     
     # Define conditional edges
@@ -615,12 +731,14 @@ def create_enhanced_workflow() -> StateGraph:
         {
             "db_query_agent": "db_query_agent",
             "weather_agent": "weather_agent",
+            "personal_assistant": "personal_assistant",
             END: END,
         },
     )
     
     workflow.add_edge("db_query_agent", "final_response")
     workflow.add_edge("weather_agent", "final_response")
+    workflow.add_edge("personal_assistant", "final_response")
     workflow.add_edge("final_response", END)
     
     # Set entry point
@@ -636,18 +754,21 @@ def process_enhanced_query(query: str) -> str:
     # Create workflow
     runnable = create_enhanced_workflow()
     
-    # Initialize state
+    # Initialize state with personal assistant as the default agent
     state = {
         "messages": [HumanMessage(content=query)],
         "next": "supervisor",
         "query": query,
-        "selected_agent": "",
+        "selected_agent": AgentType.PERSONAL_ASSISTANT.value,  # Default to personal assistant
         "agent_output": {},
         "final_answer": "",
         "processed": False,
-        "context": {},
+        "context": {
+            "routing_method": "initial",
+            "routing_reasoning": "Default initial state with personal assistant"
+        },
         "error": None,
-        "routing_confidence": 0.0,
+        "routing_confidence": 0.9,  # High confidence in default selection
         "weather_analysis": None
     }
     
@@ -669,30 +790,70 @@ def process_enhanced_query(query: str) -> str:
 if __name__ == "__main__":
     import sys
     
-    # Test queries
+    # Test queries for all agents
     test_queries = [
+        # Weather agent tests
         "Will it rain today?",
         "What's the humidity in London?", 
         "Temperature in Paris",
         "How's the weather?",
         "Is it windy outside?",
-        "What are my sales for April?"
+        
+        # Database agent tests
+        "What are my sales for April?",
+        "Show me the top 5 products by sales",
+        
+        # Personal assistant tests
+        "Hello!",
+        "What can you do?",
+        "Tell me a joke",
+        "How are you today?",
+        "Thank you for your help!",
+        "Who created you?",
+        "What's your name?"
     ]
     
-    # Get query from command line or use test queries
-    if len(sys.argv) > 1:
-        query = " ".join(sys.argv[1:])
-        queries_to_test = [query]
+    if len(sys.argv) > 1 and sys.argv[1] == "--test":
+        for query in test_queries:
+            print(f"\n{'='*80}")
+            print(f"QUERY: {query}")
+            print("-" * 80)
+            response = process_enhanced_query(query)
+            print(f"\nRESPONSE: {response}")
     else:
-        queries_to_test = test_queries
-    
-    for query in queries_to_test:
+        # Interactive mode with welcome message
         print("\n" + "="*60)
-        print(f"Enhanced Supervisor Agent - Processing: {query}")
+        print("  Welcome to Xenie - Your Personal Assistant")
+        print("  Type 'quit', 'exit', 'bye', or press Ctrl+C to exit")
+        print("  Try asking about weather, sales data, or just say hello!")
         print("="*60 + "\n")
         
-        result = process_enhanced_query(query)
-        print(f"✅ Result:\n{result}")
-        
-        if len(queries_to_test) > 1:
-            print("\n" + "-"*40)
+        while True:
+            try:
+                query = input("\nYou: ").strip()
+                
+                # Check for exit conditions
+                if not query:
+                    continue
+                    
+                # Check for goodbye messages
+                goodbye_phrases = ['quit', 'exit', 'q', 'bye', 'goodbye', 'see you', 'see ya']
+                if any(phrase in query.lower() for phrase in goodbye_phrases):
+                    print("\nXenie: Goodbye! Have a wonderful day! 👋")
+                    break
+                    
+                # Process the query and print the response
+                print("\nXenie: ", end="", flush=True)
+                response = process_enhanced_query(query)
+                print(response)
+                
+                # Check if we should exit based on the response
+                if hasattr(response, 'get') and response.get('should_exit'):
+                    break
+                
+            except KeyboardInterrupt:
+                print("\n\nGoodbye! Have a great day! 👋")
+                break
+            except Exception as e:
+                print(f"\n⚠️  An error occurred: {str(e)}")
+                print("Please try again or rephrase your question.")
