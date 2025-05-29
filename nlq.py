@@ -1,16 +1,26 @@
 import os
-import google.generativeai as genai
-from dotenv import load_dotenv
-from typing import Dict, Any, Optional
 import json
+import decimal
+from datetime import datetime, timezone
+from typing import Dict, Any, List, Optional
+from dotenv import load_dotenv
+import google.generativeai as genai
+from data import execute_query  # Import the execute_query function from data.py
+
+# Custom JSON encoder to handle Decimal types
+class DecimalEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, decimal.Decimal):
+            return float(obj)  # Convert Decimal to float for JSON serialization
+        return super().default(obj)
 
 # Load environment variables
 load_dotenv()
 
-# Configure Google's Gemini API
-genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+# Debug flag: set via environment variable NLQ_DEBUG or fallback to False
+DEBUG = os.getenv("NLQ_DEBUG", "False").lower() in ("1", "true", "yes")
 
-# Initialize the model
+# Initialize Gemini model
 MODEL_NAME = "gemini-1.5-flash"
 model = genai.GenerativeModel(MODEL_NAME)
 
@@ -69,7 +79,7 @@ Important Notes:
 
 def generate_sql_query(natural_language_query: str) -> Dict[str, Any]:
     """
-    Convert a natural language query to a SQL query using Gemini 1.5 Flash
+    Convert a natural language query to a PostgreSQL query using Gemini 1.5 Flash
     
     Args:
         natural_language_query (str): The natural language query
@@ -77,116 +87,216 @@ def generate_sql_query(natural_language_query: str) -> Dict[str, Any]:
     Returns:
         dict: A dictionary containing the SQL query and any additional information
     """
-    from datetime import datetime, timezone
-    
-    # Get current date and time with timezone info
-    current_dt = datetime.now(timezone.utc)
-    current_date = current_dt.strftime('%Y-%m-%d')
-    current_time = current_dt.strftime('%H:%M:%S %Z')
-    current_year = current_dt.year
-    
-    # Create a prompt for the model
-    prompt = f"""You are a senior database administrator. Convert the following natural language query into a PostgreSQL SQL query.
-    
-    {SCHEMA_INFO}
-    
-    Current Date Context:
-    - Current UTC Date: {current_date}
-    - Current UTC Time: {current_time}
-    - Current Year: {current_year}
-    
-    Date Handling Guidelines:
-    1. Use the current date ({current_date}) as reference for relative dates
-    2. When only month/day is specified, use the current year ({current_year})
-    3. For relative terms (e.g., "last week"), calculate from current date
-    4. Always include the year in date literals for clarity
-    
-    Instructions:
-    1. Only return valid PostgreSQL SQL
-    2. Do not include any explanations or markdown formatting
-    3. If the query is ambiguous, make reasonable assumptions and state them in the notes
-    4. For date ranges, use current date if not specified
-    5. Include the year in all date literals
-    
-    Natural Language Query: {natural_language_query}
-    
-    Return the response as a JSON object with the following structure:
-    {{
-        "sql": "SELECT * FROM table WHERE condition",
-        "assumptions": ["list", "of", "assumptions"],
-        "notes": "Any additional notes about the query"
-    }}
-    """
     
     try:
-        # Generate the response
-        response = model.generate_content(prompt)
+        # Load environment variables
+        load_dotenv()
+        
+        # Get API key
+        api_key = os.getenv("GOOGLE_API_KEY")
+        if not api_key:
+            return {
+                "sql": "",
+                "error": "GOOGLE_API_KEY not found in environment variables",
+                "assumptions": [],
+                "notes": "Configuration error"
+            }
+            
+        # Configure Google's Gemini API
+        genai.configure(api_key=api_key)
+        
+        # Initialize the model with a timeout
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        
+        # Get current date and time with timezone info
+        current_dt = datetime.now(timezone.utc)
+        current_date = current_dt.strftime('%Y-%m-%d')
+        current_time = current_dt.strftime('%H:%M:%S %Z')
+        current_year = current_dt.year
+        
+        # Create a prompt for the model
+        prompt = f"""You are a senior database administrator. Convert the following natural language query into a PostgreSQL SQL query.
+        
+        Database Schema:
+        {SCHEMA_INFO}
+        
+        Current date: {current_date} {current_time}
+        
+        Important Notes:
+        1. For customer-related queries, join with customer_info table to get customer details
+        2. Do not use any tables or columns that are not listed above
+        3. For date comparisons, use the DATE() function to extract just the date part
+        4. For monetary values, use the SUM() function to calculate totals
+        5. Always include the DATE() function when filtering by date
+        6. Return only valid PostgreSQL SQL
+        
+        User query: "{natural_language_query}"
+        
+        Respond with a JSON object containing:
+        - sql: The SQL query
+        - assumptions: Any assumptions made
+        - notes: Any additional notes about the query
+        
+        Example response for "Who is my biggest customer?":
+        {{
+            "sql": "SELECT Payment_Method, SUM(Price) as total_spent FROM sales_transactions GROUP BY Payment_Method ORDER BY total_spent DESC LIMIT 1",
+            "assumptions": ["Using Payment_Method to identify customers"],
+            "notes": "Grouping by Payment_Method to find the customer with highest total spending"
+        }}
+        """
+        
+        # Generate the response with a timeout
+        response = model.generate_content(
+            prompt,
+            generation_config={
+                "max_output_tokens": 2048,
+                "temperature": 0,
+            },
+            request_options={
+                "timeout": 60  # 60 seconds timeout
+            }
+        )
+        
+        if not response or not hasattr(response, 'text'):
+            return {
+                "sql": "",
+                "error": "Empty or invalid response from model",
+                "assumptions": [],
+                "notes": "Could not generate SQL query"
+            }
+            
+        # Extract text from response
+        response_text = response.text.strip()
         
         # Parse the response (assuming it's in JSON format)
         try:
-            # Try to parse the JSON response
-            result = json.loads(response.text)
-        except json.JSONDecodeError:
-            # If parsing fails, try to extract JSON from markdown code blocks
-            import re
-            json_match = re.search(r'```json\n(.*?)\n```', response.text, re.DOTALL)
-            if json_match:
-                result = json.loads(json_match.group(1))
+            # Clean the response text
+            if '```json' in response_text:
+                response_text = response_text.split('```json')[1].split('```')[0].strip()
+                
+            # Parse the JSON
+            result = json.loads(response_text)
+            if DEBUG:
+                print("=== PARSED GEMINI JSON ===")
+                print(result)
+                print("=========================")
+
+            # Simplified: Always return a dict with all keys; set 'success' and 'error' appropriately
+            output = {
+                "success": False,
+                "sql": "",
+                "assumptions": [],
+                "notes": [],
+                "error": None
+            }
+            if isinstance(result, dict):
+                output["sql"] = result.get("sql", "")
+                output["assumptions"] = result.get("assumptions", [])
+                output["notes"] = result.get("notes", [])
+                if "sql" in result and result["sql"]:
+                    output["success"] = True
+                else:
+                    output["error"] = "The Gemini response did not contain a valid SQL query."
             else:
-                # If all else fails, return the raw response
-                result = {"sql": response.text, "assumptions": [], "notes": "Could not parse model response"}
-        
-        return result
-        
+                output["error"] = "The Gemini response did not contain a valid SQL query."
+            return output   
+            
+        except json.JSONDecodeError as e:
+            return {
+                "sql": "",
+                "error": f"Failed to parse model response as JSON: {str(e)}\nResponse: {response_text}",
+                "assumptions": [],
+                "notes": "Could not parse model response"
+            }
+            
     except Exception as e:
         return {
             "sql": "",
-            "error": str(e),
+            "error": f"Error generating SQL query: {str(e)}",
             "assumptions": [],
             "notes": "Error generating SQL query"
         }
 
-def execute_nl_query(query: str) -> Dict[str, Any]:
+def execute_nl_query(natural_language_query: str) -> Dict[str, Any]:
     """
-    Execute a natural language query and return the results
+    Execute a natural language query against the database.
     
     Args:
-        query (str): Natural language query
+        natural_language_query (str): The natural language query
         
     Returns:
-        dict: Query results and metadata
+        Dict: The query results and metadata
     """
-    from data import execute_query
+    if DEBUG:
+        print(f"\n[DEBUG] Starting query execution for: {natural_language_query}")
     
-    # Generate SQL from natural language
-    result = generate_sql_query(query)
+    # First generate the SQL query
+    sql_result = generate_sql_query(natural_language_query)
     
-    if "sql" not in result or not result["sql"]:
+    if DEBUG:
+        print("\n=== SQL GENERATION RESULT OBJECT ===")
+        print(json.dumps(sql_result, indent=2, ensure_ascii=False, cls=DecimalEncoder))
+        print("=" * 40 + "\n")
+    
+    # Check if SQL generation was successful
+    if not sql_result.get("success", False):
         return {
             "success": False,
-            "error": "Failed to generate SQL query",
-            "details": result.get("error", "Unknown error")
+            "error": sql_result.get("error", "Failed to generate SQL query"),
+            "assumptions": sql_result.get("assumptions", []),
+            "notes": sql_result.get("notes", "SQL generation failed")
         }
     
+    sql_query = sql_result["sql"]
+    
     try:
-        # Execute the generated SQL
-        query_result = execute_query(result["sql"])
+        # Execute the actual query using the Supabase connection
+        if DEBUG:
+            print(f"[DEBUG] Executing PostgreSQL query: {sql_query}")
+        results = execute_query(sql_query)
+        
+        if not results:
+            return {
+                "success": True,
+                "sql": sql_query,
+                "assumptions": sql_result.get("assumptions", []),
+                "notes": "Query executed successfully but returned no results",
+                "data": []
+            }
+            
+        # Convert datetime objects to strings if present
+        for row in results:
+            for key, value in row.items():
+                if isinstance(value, (datetime, str)) and ('date' in key.lower() or 'time' in key.lower()):
+                    try:
+                        # Convert string to datetime and back to standard format
+                        dt = datetime.fromisoformat(value) if isinstance(value, str) else value
+                        row[key] = dt.strftime('%Y-%m-%d %H:%M:%S')
+                    except (ValueError, TypeError):
+                        pass
+        
+        if DEBUG:
+            print("[DEBUG] Query executed successfully. Result data:")
+            print(json.dumps(results, indent=2, ensure_ascii=False, cls=DecimalEncoder))
         
         return {
             "success": True,
-            "sql": result["sql"],
-            "assumptions": result.get("assumptions", []),
-            "notes": result.get("notes", ""),
-            "data": query_result
+            "sql": sql_query,
+            "assumptions": sql_result.get("assumptions", []),
+            "notes": sql_result.get("notes", "Query executed successfully"),
+            "data": results
         }
         
     except Exception as e:
+        if DEBUG:
+            print("[DEBUG] Error executing query:")
+            print(json.dumps({"error": str(e), "sql": sql_query}, indent=2, ensure_ascii=False, cls=DecimalEncoder))
         return {
             "success": False,
-            "error": str(e),
-            "sql": result["sql"],
-            "assumptions": result.get("assumptions", []),
-            "notes": "Error executing SQL query"
+            "error": f"Error executing query: {str(e)}",
+            "sql": sql_query,
+            "assumptions": sql_result.get("assumptions", []),
+            "notes": "Query execution failed"
         }
 
 def print_query_result(result):
@@ -225,26 +335,26 @@ def print_query_result(result):
 
 def test_specific_query(query):
     """Test a specific natural language query and print the results"""
-    print(f"\n{' TESTING QUERY ':=^80}", flush=True)
-    print(f"Input: {query}", flush=True)
+    print(f"\n{' TESTING QUERY ':=^80}")
+    print(f"Input: {query}")
     
     try:
         # First, just generate the SQL to see the prompt
-        print("\nGenerating SQL...", flush=True)
+        print("\nGenerating SQL...")
         sql_result = generate_sql_query(query)
-        print("\nGenerated SQL:", flush=True)
-        print("-"*80, flush=True)
-        print(sql_result.get("sql", "No SQL generated").strip(), flush=True)
+        print("\nGenerated SQL:")
+        print("-"*80)
+        print(sql_result.get("sql", "No SQL generated").strip())
         
         # Then execute the full query
-        print("\nExecuting query...", flush=True)
+        print("\nExecuting query...")
         result = execute_nl_query(query)
-        print("\nQuery executed. Results:", flush=True)
+        print("\nQuery executed. Results:")
         print_query_result(result)
         return result
         
     except Exception as e:
-        print(f"\nError in test_specific_query: {str(e)}", flush=True)
+        print(f"\nError in test_specific_query: {str(e)}")
         import traceback
         traceback.print_exc()
         return {"error": str(e), "success": False}
