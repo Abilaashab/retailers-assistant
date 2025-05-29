@@ -6,6 +6,14 @@ from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from dotenv import load_dotenv
 from nlq import generate_sql_query, execute_nl_query
+import decimal
+
+# Custom JSON encoder to handle Decimal types
+class DecimalEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, decimal.Decimal):
+            return float(obj)  # Convert Decimal to float for JSON serialization
+        return super().default(obj)
 
 # Load environment variables
 load_dotenv()
@@ -110,7 +118,7 @@ def db_query_agent_node(state: AgentState) -> Dict[str, Any]:
             print(f"\nNotes: {result['notes']}")
         if "data" in result and result["data"]:
             print("\nResult Data:")
-            print(json.dumps(result["data"], indent=2))
+            print(json.dumps(result["data"], indent=2, cls=DecimalEncoder))
         print("=" * 40 + "\n")
         
         if not result.get("success", False):
@@ -122,7 +130,7 @@ def db_query_agent_node(state: AgentState) -> Dict[str, Any]:
             }
         
         return {
-            "agent_output": json.dumps(result),
+            "agent_output": json.dumps(result, cls=DecimalEncoder),
             "status": "success"
         }
                 
@@ -151,7 +159,7 @@ You are a helpful assistant. Given the following user query and the output data 
 User Query: {query}
 
 Database Output:
-{json.dumps(data, indent=2, ensure_ascii=False)}
+{json.dumps(data, indent=2, ensure_ascii=False, cls=DecimalEncoder)}
 
 Answer: """
         response = llm.invoke([HumanMessage(content=prompt)])

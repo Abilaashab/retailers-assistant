@@ -1,13 +1,24 @@
 import os
 import json
+import decimal
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 from dotenv import load_dotenv
 import google.generativeai as genai
 from data import execute_query  # Import the execute_query function from data.py
 
+# Custom JSON encoder to handle Decimal types
+class DecimalEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, decimal.Decimal):
+            return float(obj)  # Convert Decimal to float for JSON serialization
+        return super().default(obj)
+
 # Load environment variables
 load_dotenv()
+
+# Debug flag: set via environment variable NLQ_DEBUG or fallback to False
+DEBUG = os.getenv("NLQ_DEBUG", "False").lower() in ("1", "true", "yes")
 
 # Initialize Gemini model
 MODEL_NAME = "gemini-1.5-flash"
@@ -112,7 +123,7 @@ def generate_sql_query(natural_language_query: str) -> Dict[str, Any]:
         Current date: {current_date} {current_time}
         
         Important Notes:
-        1. For customer-related queries, use the 'Payment_Method' column as it represents the customer
+        1. For customer-related queries, join with customer_info table to get customer details
         2. Do not use any tables or columns that are not listed above
         3. For date comparisons, use the DATE() function to extract just the date part
         4. For monetary values, use the SUM() function to calculate totals
@@ -165,27 +176,30 @@ def generate_sql_query(natural_language_query: str) -> Dict[str, Any]:
                 
             # Parse the JSON
             result = json.loads(response_text)
-            print("=== PARSED GEMINI JSON ===")
-            print(result)
-            print("=========================")
+            if DEBUG:
+                print("=== PARSED GEMINI JSON ===")
+                print(result)
+                print("=========================")
 
-            # Patch: Always return a dict with 'success': True if 'sql' is present
-            if isinstance(result, dict) and "sql" in result:
-                return {
-                    "success": True,
-                    "sql": result["sql"],
-                    "assumptions": result.get("assumptions", []),
-                    "notes": result.get("notes", [])
-                }
+            # Simplified: Always return a dict with all keys; set 'success' and 'error' appropriately
+            output = {
+                "success": False,
+                "sql": "",
+                "assumptions": [],
+                "notes": [],
+                "error": None
+            }
+            if isinstance(result, dict):
+                output["sql"] = result.get("sql", "")
+                output["assumptions"] = result.get("assumptions", [])
+                output["notes"] = result.get("notes", [])
+                if "sql" in result and result["sql"]:
+                    output["success"] = True
+                else:
+                    output["error"] = "The Gemini response did not contain a valid SQL query."
             else:
-                return {
-                    "success": False,
-                    "error": "The Gemini response did not contain a valid SQL query.",
-                    "assumptions": result.get("assumptions", []) if isinstance(result, dict) else [],
-                    "notes": result.get("notes", []) if isinstance(result, dict) else []
-                }
-                
-            return result
+                output["error"] = "The Gemini response did not contain a valid SQL query."
+            return output   
             
         except json.JSONDecodeError as e:
             return {
@@ -213,15 +227,16 @@ def execute_nl_query(natural_language_query: str) -> Dict[str, Any]:
     Returns:
         Dict: The query results and metadata
     """
-    print(f"\n[DEBUG] Starting query execution for: {natural_language_query}")
+    if DEBUG:
+        print(f"\n[DEBUG] Starting query execution for: {natural_language_query}")
     
     # First generate the SQL query
     sql_result = generate_sql_query(natural_language_query)
     
-    # Print the full SQL generation result for debugging
-    print("\n=== SQL GENERATION RESULT OBJECT ===")
-    print(json.dumps(sql_result, indent=2, ensure_ascii=False))
-    print("=" * 40 + "\n")
+    if DEBUG:
+        print("\n=== SQL GENERATION RESULT OBJECT ===")
+        print(json.dumps(sql_result, indent=2, ensure_ascii=False, cls=DecimalEncoder))
+        print("=" * 40 + "\n")
     
     # Check if SQL generation was successful
     if not sql_result.get("success", False):
@@ -236,7 +251,8 @@ def execute_nl_query(natural_language_query: str) -> Dict[str, Any]:
     
     try:
         # Execute the actual query using the Supabase connection
-        print(f"[DEBUG] Executing PostgreSQL query: {sql_query}")
+        if DEBUG:
+            print(f"[DEBUG] Executing PostgreSQL query: {sql_query}")
         results = execute_query(sql_query)
         
         if not results:
@@ -259,6 +275,10 @@ def execute_nl_query(natural_language_query: str) -> Dict[str, Any]:
                     except (ValueError, TypeError):
                         pass
         
+        if DEBUG:
+            print("[DEBUG] Query executed successfully. Result data:")
+            print(json.dumps(results, indent=2, ensure_ascii=False, cls=DecimalEncoder))
+        
         return {
             "success": True,
             "sql": sql_query,
@@ -268,9 +288,9 @@ def execute_nl_query(natural_language_query: str) -> Dict[str, Any]:
         }
         
     except Exception as e:
-        import traceback
-        error_details = traceback.format_exc()
-        print(f"[ERROR] Exception in execute_nl_query: {error_details}")
+        if DEBUG:
+            print("[DEBUG] Error executing query:")
+            print(json.dumps({"error": str(e), "sql": sql_query}, indent=2, ensure_ascii=False, cls=DecimalEncoder))
         return {
             "success": False,
             "error": f"Error executing query: {str(e)}",
