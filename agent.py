@@ -686,7 +686,7 @@ Generate a natural response:"""
         return {"final_answer": f"🌤️ Weather in {location}: {temp}°C, {desc}"}
 
 def format_database_response(query: str, data: Any) -> Dict[str, str]:
-    """Format database response using LLM."""
+    """Format database response using LLM with Indian Rupees formatting."""
     try:
         llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", temperature=0)
         
@@ -699,9 +699,12 @@ Data:
 
 Instructions:
 - If data is empty or None, politely indicate no results were found
+- Format all monetary values in Indian Rupees (₹) instead of dollars
+- For any currency amounts, use the format: ₹X,XXX.XX (e.g., ₹1,234.56)
 - Summarize key findings in a user-friendly way
 - Use appropriate emojis and formatting
 - Keep the response concise but informative
+- Example: Instead of $100, show as ₹100
 
 Response:"""
         

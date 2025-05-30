@@ -121,14 +121,16 @@ def generate_sql_query(natural_language_query: str) -> Dict[str, Any]:
         {SCHEMA_INFO}
         
         Current date: {current_date} {current_time}
-        
+        Current year: {current_year}
+
         Important Notes:
         1. For customer-related queries, join with customer_info table to get customer details
         2. Do not use any tables or columns that are not listed above
         3. For date comparisons, use the DATE() function to extract just the date part
         4. For monetary values, use the SUM() function to calculate totals
         5. Always include the DATE() function when filtering by date
-        6. Return only valid PostgreSQL SQL
+        6. When a date is mentioned without a year, assume the current year ({current_year}) unless specified otherwise
+        7. Return only valid PostgreSQL SQL
         
         User query: "{natural_language_query}"
         
