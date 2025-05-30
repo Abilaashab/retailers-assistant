@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from nlq import generate_sql_query, execute_nl_query
 from weather_agent import WeatherAgent
 from pa_agent import PersonalAssistantAgent
+from analytics_agent import AnalyticsAgent
 import decimal
 import traceback
 from datetime import datetime
@@ -38,6 +39,7 @@ class AgentType(Enum):
     DB_QUERY = "db_query_agent"
     WEATHER = "weather_agent"
     PERSONAL_ASSISTANT = "personal_assistant"
+    ANALYTICS = "analytics_agent"
 
 # Enhanced weather query analysis dataclass
 @dataclass
@@ -60,7 +62,7 @@ class AgentConfig:
 # Improved state schema with better typing
 class AgentState(TypedDict):
     messages: Annotated[List[Union[HumanMessage, AIMessage]], lambda x, y: x + y]
-    next: Literal["supervisor", "db_query_agent", "weather_agent", "personal_assistant", END]
+    next: Literal["supervisor", "db_query_agent", "weather_agent", "personal_assistant", "analytics_agent", END]
     query: str
     selected_agent: str
     agent_output: Dict[str, Any]
@@ -84,6 +86,7 @@ class EnhancedWeatherAgent:
             max_retries=3
         )
         self.weather_agent = WeatherAgent()
+        self.analytics_agent = AnalyticsAgent()
     
     def analyze_weather_query(self, query: str) -> WeatherQueryAnalysis:
         """Use LLM to intelligently analyze weather queries."""
@@ -258,21 +261,30 @@ class SupervisorAgent:
             max_retries=3
         )
         self.pa_agent = PersonalAssistantAgent()
+        self.analytics_agent = AnalyticsAgent()
         
         self.agents = {
+            AgentType.ANALYTICS.value: AgentConfig(
+                name="analytics_agent",
+                description="Handles complex analytical queries requiring multiple data points and advanced analysis",
+                keywords=["analyze", "analysis", "trend", "insight", "recommend", "suggest",
+                         "improve", "optimize", "performance", "efficiency", "strategy",
+                         "opportunity", "why", "how to", "what should", "business case"],
+                priority=1
+            ),
             AgentType.DB_QUERY.value: AgentConfig(
                 name="db_query_agent",
-                description="Handles database queries, analytics, and data retrieval operations",
-                keywords=["data", "database", "query", "analytics", "sales", "users", "records", 
+                description="Handles database queries and data retrieval operations",
+                keywords=["data", "database", "query", "sales", "users", "records", 
                          "count", "sum", "average", "report", "statistics", "metrics"],
-                priority=1
+                priority=2
             ),
             AgentType.WEATHER.value: AgentConfig(
                 name="weather_agent", 
                 description="Provides current weather information and forecasts for any location",
                 keywords=["weather", "temperature", "rain", "snow", "sunny", "cloudy", "forecast", 
                          "hot", "cold", "humid", "°c", "°f", "degrees", "climate", "conditions"],
-                priority=2
+                priority=3
             ),
             AgentType.PERSONAL_ASSISTANT.value: AgentConfig(
                 name="personal_assistant",
@@ -285,71 +297,77 @@ class SupervisorAgent:
     def route_query(self, query: str) -> Dict[str, Any]:
         """Enhanced routing logic with LLM assistance."""
         try:
-            # First, check if this is a greeting or general query
+            # First check for general queries
             if self._is_general_query(query):
                 return {
-                    "agent": AgentType.PERSONAL_ASSISTANT.value,
-                    "confidence": 0.9,
-                    "reasoning": "General query or greeting detected",
-                    "method": "direct"
+                    'next_agent': AgentType.PERSONAL_ASSISTANT.value,
+                    'confidence': 0.95,
+                    'reasoning': 'Identified as general conversation or greeting.'
                 }
                 
-            # Use LLM for intelligent routing
-            result = self._llm_route_query(query)
-            
-            # If confidence is too low, default to personal assistant
-            if result.get("confidence", 0) < 0.4:
+            # Check if this is an analytics query
+            analytics_analysis = self.analytics_agent.analyze_query(query)
+            if analytics_analysis.get('is_analytics_query', False):
                 return {
-                    "agent": AgentType.PERSONAL_ASSISTANT.value,
-                    "confidence": 0.7,
-                    "reasoning": f"Low confidence in agent selection: {result.get('reasoning', 'No reasoning provided')}",
-                    "method": "fallback"
+                    'next_agent': AgentType.ANALYTICS.value,
+                    'confidence': analytics_analysis.get('confidence', 0.8),
+                    'reasoning': 'Identified as an analytics query requiring complex analysis.'
                 }
-                
-            return result
+            
+            # Use LLM for routing decision for other agent types
+            return self._llm_route_query(query)
             
         except Exception as e:
-            logger.error(f"Error in routing: {str(e)}")
+            logger.error(f"Error in route_query: {str(e)}")
             # Default to personal assistant on error
             return {
-                "agent": AgentType.PERSONAL_ASSISTANT.value,
-                "confidence": 0.6,
-                "reasoning": f"Fallback to personal assistant due to error: {str(e)}",
-                "method": "error_fallback"
+                'next_agent': AgentType.PERSONAL_ASSISTANT.value,
+                'confidence': 0.5,
+                'reasoning': f'Error in routing: {str(e)}. Defaulting to personal assistant.'
             }
             
     def _is_general_query(self, query: str) -> bool:
-        """Check if the query is a general conversation or greeting."""
+        """Check if the query is a general conversation or greeting.
+        
+        Returns True only for very clear cases of general conversation that don't require data analysis.
+        """
         if not query or not query.strip():
             return True
             
         query_lower = query.lower().strip()
         
-        # Check for goodbyes first
-        goodbye_phrases = ["goodbye", "bye", "see you", "see ya", "take care", "farewell", "have a good", "have a nice"]
+        # Check for goodbyes
+        goodbye_phrases = ["goodbye", "bye", "see you", "see ya", "take care", "farewell"]
         if any(phrase in query_lower for phrase in goodbye_phrases):
             return True
             
-        # Check for greetings
-        greetings = ["hello", "hi", "hey", "greetings", "good morning", "good afternoon", "good evening"]
-        if any(greeting in query_lower for greeting in greetings):
+        # Check for simple greetings without any other content
+        greetings = [
+            "hello", "hi", "hey", "greetings", 
+            "good morning", "good afternoon", "good evening",
+            "what's up", "how are you", "how's it going", "how do you do"
+        ]
+        if any(query_lower == greeting for greeting in greetings):
             return True
             
-        # Check for thanks
-        if any(phrase in query_lower for phrase in ["thank", "thanks", "appreciate"]):
+        # Check for thanks without any other content
+        if query_lower in ["thanks", "thank you", "thank you!"]:
             return True
             
         # Check for capabilities questions
-        if any(phrase in query_lower for phrase in ["what can you do", "help", "capabilities", "who are you"]):
+        if query_lower in ["what can you do", "help", "capabilities", "who are you"]:
             return True
             
-        # Check for general conversation
+        # Check for general conversation without any analytical intent
         general_phrases = [
-            "how are you", "what's up", "how's it going", "how do you do",
             "tell me about yourself", "who made you", "what are you",
-            "your name"
+            "your name", "who created you"
         ]
         if any(phrase in query_lower for phrase in general_phrases):
+            return True
+            
+        # If the query is very short and looks like a greeting
+        if len(query_lower.split()) <= 3 and any(word in query_lower for word in ["hi", "hello", "hey"]):
             return True
             
         return False
@@ -395,24 +413,31 @@ Respond with JSON:
             
             result = json.loads(content)
             
-            if result["agent"] not in self.agents:
-                result["agent"] = AgentType.DB_QUERY.value
+            # Convert the agent name to the correct format if needed
+            agent_name = result.get("agent")
+            if agent_name not in self.agents:
+                agent_name = AgentType.PERSONAL_ASSISTANT.value
             
-            result.setdefault("confidence", 0.5)
-            result.setdefault("reasoning", "LLM-based routing")
-            result["method"] = "llm"
+            confidence = result.get("confidence", 0.5)
+            reasoning = result.get("reasoning", "LLM-based routing")
             
-            return result
+            return {
+                "next_agent": agent_name,
+                "confidence": confidence,
+                "reasoning": reasoning,
+                "method": "llm"
+            }
             
         except Exception as e:
             logger.error(f"LLM routing failed: {str(e)}")
             return {
-                "agent": AgentType.DB_QUERY.value,
+                "next_agent": AgentType.PERSONAL_ASSISTANT.value,
                 "confidence": 0.1,
                 "reasoning": f"LLM routing failed: {str(e)}",
                 "method": "fallback"
             }
 
+# ... (rest of the code remains the same)
 # Enhanced node functions
 def supervisor_node(state: AgentState) -> Dict[str, Any]:
     """Enhanced supervisor node."""
@@ -436,7 +461,7 @@ def supervisor_node(state: AgentState) -> Dict[str, Any]:
     
     # Route the query
     routing_result = supervisor.route_query(query)
-    selected_agent = routing_result["agent"]
+    selected_agent = routing_result["next_agent"]
     
     logger.info(f"Query: '{query}' -> Agent: {selected_agent} (confidence: {routing_result['confidence']:.2f})")
     
@@ -446,7 +471,7 @@ def supervisor_node(state: AgentState) -> Dict[str, Any]:
         "query": query,
         "routing_confidence": routing_result["confidence"],
         "context": {
-            "routing_method": routing_result["method"],
+            "routing_method": "direct" if 'method' not in routing_result else routing_result["method"],
             "routing_reasoning": routing_result["reasoning"]
         }
     }
@@ -551,6 +576,50 @@ def enhanced_weather_agent_node(state: AgentState) -> Dict[str, Any]:
             "error": error_msg
         }
 
+def analytics_agent_node(state: AgentState) -> Dict[str, Any]:
+    """Analytics agent node for processing complex analytical queries."""
+    try:
+        logger.info("Analytics agent processing query")
+        
+        # Get the last user message
+        last_message = next(m for m in reversed(state["messages"]) if isinstance(m, HumanMessage))
+        
+        # Create an instance of the analytics agent
+        analytics_agent = AnalyticsAgent()
+        
+        # Process the query with the analytics agent
+        result = analytics_agent.process_analytics_query(last_message.content)
+        
+        # Update state with the results
+        state["agent_output"] = result
+        
+        if result.get('success', False):
+            state["final_answer"] = result.get("formatted_response", "I've completed the analysis.")
+            state["processed"] = True
+            state["next"] = "final_response"
+        else:
+            # If processing failed, provide a helpful error message
+            state["final_answer"] = result.get(
+                "formatted_response", 
+                "I encountered an issue processing your request. Please try rephrasing your question."
+            )
+            state["error"] = result.get("error", "Unknown error in analytics processing")
+            state["processed"] = True
+            state["next"] = "final_response"
+        
+        return state
+        
+    except Exception as e:
+        error_msg = f"Error in analytics_agent_node: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        state["error"] = error_msg
+        state["final_answer"] = (
+            "I encountered an error while processing your analytics request. "
+            "Please try again or provide more specific details."
+        )
+        state["next"] = "final_response"
+        return state
+
 def personal_assistant_node(state: AgentState) -> Dict[str, Any]:
     """Personal assistant node for general queries and conversations."""
     try:
@@ -617,6 +686,8 @@ def enhanced_final_response_node(state: AgentState) -> Dict[str, str]:
             if agent_output.get("type") == "goodbye" or agent_output.get("should_exit", False):
                 response["should_exit"] = True
             return response
+        elif selected_agent == AgentType.ANALYTICS.value:
+            return format_analytics_response(query, agent_output.get("data", {}))
         else:
             # Default to database response for any other agent
             return format_database_response(query, agent_output.get("data"))
@@ -685,9 +756,55 @@ Generate a natural response:"""
         
         return {"final_answer": f"🌤️ Weather in {location}: {temp}°C, {desc}"}
 
+def format_analytics_response(query: str, data: Any) -> Dict[str, str]:
+    """Format analytics response using LLM."""
+    try:
+        llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", temperature=0)
+        
+        prompt = f"""Generate a natural, conversational response for the user's analytics query based on the provided data.
+
+User Query: "{query}"
+
+Data:
+{json.dumps(data, indent=2, ensure_ascii=False)}
+
+Instructions:
+1. Focus on the key findings and insights from the data
+2. Be conversational and natural - avoid bullet points unless listing multiple items
+3. Use appropriate emojis to make it engaging
+4. Keep it concise but informative
+
+Generate a natural response:"""
+        
+        response = llm.invoke([HumanMessage(content=prompt)])
+        return {"final_answer": response.content.strip()}
+        
+    except Exception as e:
+        logger.error(f"Error formatting analytics response: {str(e)}")
+        return {"final_answer": f"📊 I found some data but couldn't format it properly: {str(e)}"}
+
 def format_database_response(query: str, data: Any) -> Dict[str, str]:
     """Format database response using LLM with Indian Rupees formatting."""
     try:
+        # Handle empty results first
+        if not data:
+            return {"final_answer": "I couldn't find any matching records for your query."}
+            
+        # Special handling for count queries
+        if isinstance(data, list) and len(data) == 1 and 'transaction_count' in data[0]:
+            count = data[0]['transaction_count']
+            return {"final_answer": f"There are {count} transactions that match your criteria."}
+            
+        # Convert datetime objects to strings
+        def serialize_dates(obj):
+            if isinstance(obj, (datetime.date, datetime.datetime)):
+                return obj.isoformat()
+            raise TypeError(f"Type {type(obj)} not serializable")
+            
+        # Convert data to JSON-serializable format
+        serialized_data = json.loads(json.dumps(data, default=serialize_dates, ensure_ascii=False))
+            
+        # For other types of queries, use the LLM for formatting
         llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", temperature=0)
         
         prompt = f"""Generate a concise, natural language answer for the user query based on the data provided.
@@ -695,15 +812,15 @@ def format_database_response(query: str, data: Any) -> Dict[str, str]:
 User Query: {query}
 
 Data:
-{json.dumps(data, indent=2, ensure_ascii=False, cls=DecimalEncoder)}
+{json.dumps(serialized_data, indent=2, ensure_ascii=False, cls=DecimalEncoder)}
 
 Instructions:
-- If data is empty or None, politely indicate no results were found
 - Format all monetary values in Indian Rupees (₹) instead of dollars
 - For any currency amounts, use the format: ₹X,XXX.XX (e.g., ₹1,234.56)
 - Summarize key findings in a user-friendly way
 - Use appropriate emojis and formatting
 - Keep the response concise but informative
+- If there are many results, show a summary and mention the total count
 - Example: Instead of $100, show as ₹100
 
 Response:"""
@@ -713,7 +830,11 @@ Response:"""
         
     except Exception as e:
         logger.error(f"Error formatting database response: {str(e)}")
-        return {"final_answer": f"📊 I found some data but couldn't format it properly: {str(e)}"}
+        # Return the raw data if formatting fails
+        try:
+            return {"final_answer": f"Here are the results:\n{json.dumps(data, indent=2, default=str, ensure_ascii=False)}"}
+        except:
+            return {"final_answer": f"📊 I found some data but couldn't format it properly: {str(e)}"}
 
 # Create enhanced workflow
 def create_enhanced_workflow() -> StateGraph:
@@ -725,9 +846,16 @@ def create_enhanced_workflow() -> StateGraph:
     workflow.add_node("db_query_agent", db_query_agent_node)
     workflow.add_node("weather_agent", enhanced_weather_agent_node)
     workflow.add_node("personal_assistant", personal_assistant_node)
+    workflow.add_node("analytics_agent", analytics_agent_node)
     workflow.add_node("final_response", enhanced_final_response_node)
     
-    # Define conditional edges
+    # Add edges
+    workflow.add_edge("db_query_agent", "final_response")
+    workflow.add_edge("weather_agent", "final_response")
+    workflow.add_edge("personal_assistant", "final_response")
+    workflow.add_edge("analytics_agent", "final_response")
+    
+    # Add conditional edges
     workflow.add_conditional_edges(
         "supervisor",
         lambda x: x["next"],
@@ -735,17 +863,13 @@ def create_enhanced_workflow() -> StateGraph:
             "db_query_agent": "db_query_agent",
             "weather_agent": "weather_agent",
             "personal_assistant": "personal_assistant",
+            "analytics_agent": "analytics_agent",
             END: END,
         },
     )
     
-    workflow.add_edge("db_query_agent", "final_response")
-    workflow.add_edge("weather_agent", "final_response")
-    workflow.add_edge("personal_assistant", "final_response")
-    workflow.add_edge("final_response", END)
-    
-    # Set entry point
     workflow.set_entry_point("supervisor")
+    workflow.set_finish_point("final_response")
     
     return workflow.compile()
 

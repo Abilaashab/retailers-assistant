@@ -2,7 +2,7 @@ import os
 from typing import Dict, Any, Optional
 import logging
 from dotenv import load_dotenv
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 # Configure logging
@@ -21,18 +21,20 @@ class PersonalAssistantAgent:
     def __init__(self):
         """Initialize the Personal Assistant Agent."""
         load_dotenv()
-        self.user_name = os.getenv('DEFAULT_USER_NAME', 'Valued Customer')
+        self.user_name = os.getenv('DEFAULT_USER_NAME', 'Store Owner')
         self.llm = ChatGoogleGenerativeAI(
             model="gemini-1.5-flash",
             temperature=0.7,  # Slightly higher temperature for more conversational responses
             max_retries=3
         )
         self.capabilities = [
-            "Answering general questions about retail operations",
-            "Providing business hours and store information",
-            "Assisting with basic product inquiries",
-            "Helping with common retail-related questions",
-            "Engaging in friendly conversation"
+            "Analyzing store performance metrics and KPIs",
+            "Providing insights on inventory management",
+            "Assisting with staff scheduling and management",
+            "Helping with retail business strategy and planning",
+            "Analyzing customer behavior and preferences",
+            "Suggesting pricing and promotion strategies",
+            "Providing retail market insights and trends"
         ]
     
     def process_query(self, query: str) -> Dict[str, Any]:
@@ -49,44 +51,52 @@ class PersonalAssistantAgent:
             logger.info(f"Processing personal assistant query: {query}")
             
             # Check if this is a goodbye
-            if self._is_goodbye(query):
+            if any(phrase in query.lower() for phrase in ["bye", "goodbye", "see you", "take care"]):
                 return {
                     "success": True,
-                    "response": f"Goodbye, {self.user_name}! Have a wonderful day! 👋",
-                    "type": "goodbye",
-                    "should_exit": True
+                    "response": f"Goodbye! Feel free to reach out if you need any more help with your retail business. Have a great day! 👋",
+                    "type": "goodbye"
                 }
             
             # Check if this is a greeting
-            if self._is_greeting(query):
+            if any(word in query.lower() for word in ["hi", "hello", "hey", "greetings"]):
                 return {
                     "success": True,
-                    "response": self._generate_greeting(),
+                    "response": (
+                        f"Hello {self.user_name}, I'm Xenie, your retail business assistant! 👋\n\n"
+                        "I'm here to help you manage and grow your retail business. Here's what I can help you with:\n"
+                        "• Analyzing sales performance and trends\n"
+                        "• Managing inventory and stock levels\n"
+                        "• Understanding customer behavior and preferences\n"
+                        "• Optimizing pricing and promotions\n"
+                        "• Providing business insights and recommendations\n\n"
+                        "What would you like to work on today?"
+                    ),
                     "type": "greeting"
                 }
-                
-            # Check if this is a capabilities query
-            if self._is_capabilities_query(query):
-                return {
-                    "success": True,
-                    "response": self._list_capabilities(),
-                    "type": "capabilities"
-                }
             
-            # Use LLM to generate a response
-            response = self._generate_llm_response(query)
-            
-            # Check if the response indicates the query is out of scope
-            if self._is_out_of_scope(response):
-                return {
-                    "success": False,
-                    "response": self._get_out_of_scope_response(),
-                    "type": "out_of_scope"
-                }
-            
+            # For other queries, use LLM to generate a response
+            messages = [
+                SystemMessage(content=(
+                    "You are Xenie, an AI assistant specifically designed for retail store owners. "
+                    "Your primary goal is to help the owner manage and grow their retail business. "
+                    "Focus on providing business-focused advice, not customer service.\n\n"
+                    "Key responsibilities include:\n"
+                    "1. Analyzing sales and business performance\n"
+                    "2. Providing inventory and supply chain recommendations\n"
+                    "3. Assisting with staff management and scheduling\n"
+                    "4. Offering marketing and promotion strategies\n"
+                    "5. Helping with business planning and strategy\n\n"
+                    "Be professional, data-driven, and focused on business outcomes. "
+                    "If you don't know something, be honest and offer to help find the information. "
+                    "Always maintain a business-owner perspective in your responses."
+                )),
+                HumanMessage(content=f"As a retail store owner, I'd like to know: {query}")
+            ]
+            response = self.llm.invoke(messages)
             return {
                 "success": True,
-                "response": response,
+                "response": response.content.strip(),
                 "type": "general_response"
             }
             

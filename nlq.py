@@ -87,136 +87,103 @@ def generate_sql_query(natural_language_query: str) -> Dict[str, Any]:
     Returns:
         dict: A dictionary containing the SQL query and any additional information
     """
-    
     try:
-        # Load environment variables
-        load_dotenv()
-        
-        # Get API key
-        api_key = os.getenv("GOOGLE_API_KEY")
-        if not api_key:
-            return {
-                "sql": "",
-                "error": "GOOGLE_API_KEY not found in environment variables",
-                "assumptions": [],
-                "notes": "Configuration error"
-            }
-            
-        # Configure Google's Gemini API
-        genai.configure(api_key=api_key)
-        
-        # Initialize the model with a timeout
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        
-        # Get current date and time with timezone info
-        current_dt = datetime.now(timezone.utc)
-        current_date = current_dt.strftime('%Y-%m-%d')
-        current_time = current_dt.strftime('%H:%M:%S %Z')
-        current_year = current_dt.year
-        
         # Create a prompt for the model
         prompt = f"""You are a senior database administrator. Convert the following natural language query into a PostgreSQL SQL query.
-        
-        Database Schema:
-        {SCHEMA_INFO}
-        
-        Current date: {current_date} {current_time}
-        Current year: {current_year}
 
-        Important Notes:
-        1. For customer-related queries, join with customer_info table to get customer details
-        2. Do not use any tables or columns that are not listed above
-        3. For date comparisons, use the DATE() function to extract just the date part
-        4. For monetary values, use the SUM() function to calculate totals
-        5. Always include the DATE() function when filtering by date
-        6. When a date is mentioned without a year, assume the current year ({current_year}) unless specified otherwise
-        7. Return only valid PostgreSQL SQL
+Database Schema:
+{SCHEMA_INFO}
+
+Natural Language Query: "{natural_language_query}"
+
+Instructions:
+1. Use the exact column and table names as shown in the schema (case-sensitive, use double quotes)
+2. For transaction amounts, calculate the total as ("Price" * "Quantity") when the query refers to 'amount', 'total', or 'value' of a transaction
+3. Use proper JOINs to include related information (e.g., customer names, employee names)
+4. Always use table aliases (e.g., 's' for sales_transactions, 'c' for customer_info, 'e' for employee_performance)
+5. Format dates using TO_CHAR() for better readability
+6. Use ILIKE for case-insensitive text searches
+7. For count queries, use COUNT(*) and alias it as 'transaction_count'
+
+Return a JSON object with the following structure:
+{{
+    "sql": "the generated SQL query",
+    "assumptions": ["list any assumptions made"],
+    "notes": "any additional notes"
+}}
+
+Example Response:
+{{
+    "sql": "SELECT COUNT(*) AS \"transaction_count\" FROM \"sales_transactions\" WHERE (\"Price\" * \"Quantity\") > 10",
+    "assumptions": ["The user wants to count transactions where the total amount (Price * Quantity) is greater than 10"],
+    "notes": "Used exact column names with double quotes for case sensitivity"
+}}"""
+
+        if DEBUG:
+            print("\n=== GENERATING SQL QUERY ===")
+            print(f"Query: {natural_language_query}")
+            print("Sending to Gemini model...")
+
+        # Generate the SQL query using Gemini
+        response = model.generate_content(prompt)
         
-        User query: "{natural_language_query}"
+        if DEBUG:
+            print("\n=== GEMINI RESPONSE ===")
+            print(response.text)
+            print("=" * 40 + "\n")
         
-        Respond with a JSON object containing:
-        - sql: The SQL query
-        - assumptions: Any assumptions made
-        - notes: Any additional notes about the query
-        
-        Example response for "Who is my biggest customer?":
-        {{
-            "sql": "SELECT Payment_Method, SUM(Price) as total_spent FROM sales_transactions GROUP BY Payment_Method ORDER BY total_spent DESC LIMIT 1",
-            "assumptions": ["Using Payment_Method to identify customers"],
-            "notes": "Grouping by Payment_Method to find the customer with highest total spending"
-        }}
-        """
-        
-        # Generate the response with a timeout
-        response = model.generate_content(
-            prompt,
-            generation_config={
-                "max_output_tokens": 2048,
-                "temperature": 0,
-            },
-            request_options={
-                "timeout": 60  # 60 seconds timeout
-            }
-        )
-        
-        if not response or not hasattr(response, 'text'):
-            return {
-                "sql": "",
-                "error": "Empty or invalid response from model",
-                "assumptions": [],
-                "notes": "Could not generate SQL query"
-            }
-            
-        # Extract text from response
-        response_text = response.text.strip()
-        
-        # Parse the response (assuming it's in JSON format)
+        # Extract JSON from the response
         try:
-            # Clean the response text
-            if '```json' in response_text:
-                response_text = response_text.split('```json')[1].split('```')[0].strip()
-                
+            # Try to find JSON in the response
+            json_start = response.text.find('{')
+            json_end = response.text.rfind('}') + 1
+            json_str = response.text[json_start:json_end].strip()
+            
             # Parse the JSON
-            result = json.loads(response_text)
+            result = json.loads(json_str)
+            
+            # Ensure required fields exist
+            if 'sql' not in result:
+                raise ValueError("Response missing 'sql' field")
+                
+            # Add success flag
+            result['success'] = True
+            
+            # Add default values for optional fields
+            if 'assumptions' not in result:
+                result['assumptions'] = []
+            if 'notes' not in result:
+                result['notes'] = ""
+            
             if DEBUG:
-                print("=== PARSED GEMINI JSON ===")
-                print(result)
-                print("=========================")
-
-            # Simplified: Always return a dict with all keys; set 'success' and 'error' appropriately
-            output = {
-                "success": False,
-                "sql": "",
-                "assumptions": [],
-                "notes": [],
-                "error": None
-            }
-            if isinstance(result, dict):
-                output["sql"] = result.get("sql", "")
-                output["assumptions"] = result.get("assumptions", [])
-                output["notes"] = result.get("notes", [])
-                if "sql" in result and result["sql"]:
-                    output["success"] = True
-                else:
-                    output["error"] = "The Gemini response did not contain a valid SQL query."
-            else:
-                output["error"] = "The Gemini response did not contain a valid SQL query."
-            return output   
+                print("\n=== PARSED RESULT ===")
+                print(f"SQL: {result['sql']}")
+                print(f"Assumptions: {result['assumptions']}")
+                print(f"Notes: {result['notes']}")
+                print("=" * 40 + "\n")
+            
+            return result
             
         except json.JSONDecodeError as e:
+            error_msg = f"Failed to parse JSON response from model: {str(e)}"
+            if DEBUG:
+                print(f"\n[ERROR] {error_msg}")
+                print(f"Response text: {response.text}")
             return {
-                "sql": "",
-                "error": f"Failed to parse model response as JSON: {str(e)}\nResponse: {response_text}",
-                "assumptions": [],
-                "notes": "Could not parse model response"
+                'success': False,
+                'error': error_msg,
+                'raw_response': response.text
             }
             
     except Exception as e:
+        error_msg = f"Error generating SQL query: {str(e)}"
+        if DEBUG:
+            print(f"\n[ERROR] {error_msg}")
+            import traceback
+            traceback.print_exc()
         return {
-            "sql": "",
-            "error": f"Error generating SQL query: {str(e)}",
-            "assumptions": [],
-            "notes": "Error generating SQL query"
+            'success': False,
+            'error': error_msg
         }
 
 def execute_nl_query(natural_language_query: str) -> Dict[str, Any]:
