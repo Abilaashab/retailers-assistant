@@ -1,4 +1,5 @@
 import os
+print(f"[DEBUG] Loaded analytics_agent.py from: {__file__}")
 import logging
 import json
 import re
@@ -58,9 +59,16 @@ class AnalyticsAgent:
             Dict[str, Any]: Response containing insights and formatted output
         """
         try:
+            print("\n[DEBUG] ===== ENTERED process_analytics_query =====")
+            print(f"[DEBUG] Query: {query}")
             logger.info(f"Processing analytics query: {query}")
             
-            # Split the query into individual questions if it contains multiple questions
+            # Detect discount aggregation/ranking queries and handle them directly FIRST
+            if self._is_discount_aggregation_query(query):
+                logger.info("[DEBUG] Detected discount aggregation query, handling directly.")
+                return self._process_discount_aggregation_query(query)
+            
+            # Only split into individual questions if not a discount aggregation query
             questions = self._split_into_questions(query)
             logger.info(f"Split into {len(questions)} questions: {questions}")
             
@@ -98,6 +106,174 @@ class AnalyticsAgent:
                     "I'm having trouble processing your analytics request. "
                     "Please try rephrasing your question or ask about a specific metric."
                 )
+            }
+
+    def _is_discount_aggregation_query(self, query: str) -> bool:
+        """
+        Detect if the query is about aggregating or ranking discounts per customer.
+        """
+        print("\n[DEBUG] ===== ENTERED _is_discount_aggregation_query =====")
+        print(f"[DEBUG] Query: {query}")
+        logger.info(f"[DEBUG] _is_discount_aggregation_query called with: {query}")
+        
+        # Call the helper and store the result
+        result = self._is_discount_aggregation_query_helper(query)
+        
+        print(f"[DEBUG] _is_discount_aggregation_query result: {result}")
+        logger.info(f"[DEBUG] _is_discount_aggregation_query result: {result}")
+        return result
+
+    def _is_discount_aggregation_query_helper(self, query: str) -> bool:
+        q = query.lower()
+        discount_keywords = ["discount", "discounts", "percent", "percentage", "off"]
+        customer_keywords = ["customer", "customers", "buyer", "buyers", "person", "people"]
+        ranking_keywords = ["most", "top", "highest", "biggest", "largest", "maximum", "max", "rank", "order", "sort"]
+        if any(dk in q for dk in discount_keywords) and any(ck in q for ck in customer_keywords) and any(rk in q for rk in ranking_keywords):
+            logger.info("[DEBUG] Discount aggregation pattern matched (keywords)")
+            return True
+        # Also match queries like "which customer got the most discount"
+        if re.search(r"which.*customer.*(discount|discounts|percent|percentage|off)", q):
+            logger.info("[DEBUG] Discount aggregation pattern matched (regex)")
+            return True
+        return False
+
+    def _process_discount_aggregation_query(self, query: str) -> Dict[str, Any]:
+        """
+        Handle queries about which customers received the most/least discounts by aggregating discount percentages per customer.
+        """
+        try:
+            logger.info("Processing discount aggregation query")
+            
+            # Formulate a more specific SQL query directly
+            sql_query = """
+            SELECT 
+                c."Name" as customer_name,
+                CAST(REPLACE(REPLACE(s."DiscountApplied", '%', ''), ' off', '') AS FLOAT) as discount_percentage,
+                COUNT(*) as transaction_count
+            FROM "sales_transactions" s
+            JOIN "customer_info" c ON s."CustomerID" = c."CustomerID"
+            WHERE s."DiscountApplied" IS NOT NULL AND s."DiscountApplied" != ''
+            GROUP BY c."Name", discount_percentage
+            ORDER BY discount_percentage ASC, transaction_count DESC
+            """
+            
+            # Log the query we're about to execute
+            logger.info(f"Executing direct SQL query for discount aggregation:")
+            logger.info(sql_query)
+            
+            # Execute the query directly using the database connection
+            from data import execute_query
+            data = execute_query(sql_query)
+            
+            # Log the raw result for debugging
+            logger.info(f"Query executed. Rows returned: {len(data) if data else 0}")
+            if data:
+                logger.info(f"Sample row: {data[0]}")
+            
+            if not data:
+                # Try a more permissive query if no results
+                logger.info("No results from first query, trying fallback query...")
+                fallback_query = """
+                SELECT 
+                    c."Name" as customer_name,
+                    s."DiscountApplied" as discount_percentage,
+                    COUNT(*) as transaction_count
+                FROM "sales_transactions" s
+                JOIN "customer_info" c ON s."CustomerID" = c."CustomerID"
+                WHERE s."DiscountApplied" IS NOT NULL
+                GROUP BY c."Name", s."DiscountApplied"
+                ORDER BY s."DiscountApplied" ASC, transaction_count DESC
+                """
+                data = execute_query(fallback_query)
+                logger.info(f"Fallback query returned {len(data) if data else 0} rows")
+            
+            if not data:
+                logger.warning("No customer discount data found in the database")
+                return {
+                    'success': True,
+                    'formatted_response': "I couldn't find any customer discount data in the system to answer your question.",
+                    'raw_results': []
+                }
+                
+            # Process the data
+            try:
+                # Extract and format customer discounts
+                customer_discounts = []
+                
+                for row in data:
+                    try:
+                        # Get customer name from the row
+                        name = row.get('customer_name', 'Unknown Customer')
+                        
+                        # Get discount percentage, converting from string if necessary
+                        discount = row.get('discount_percentage')
+                        if isinstance(discount, str):
+                            try:
+                                # Remove any percentage signs or text
+                                discount = float(''.join(c for c in discount if c.isdigit() or c == '.'))
+                            except (ValueError, TypeError):
+                                logger.warning(f"Could not parse discount value: {discount}")
+                                continue
+                        
+                        # Only add if we have a valid discount
+                        if discount is not None:
+                            customer_discounts.append((name, float(discount)))
+                    except Exception as e:
+                        logger.warning(f"Error processing row {row}: {str(e)}")
+                        continue
+                
+                if not customer_discounts:
+                    logger.warning("No valid discount data found in the results")
+                    return {
+                        'success': True,
+                        'formatted_response': "I found customer data, but couldn't extract any valid discount percentages.",
+                        'raw_results': data
+                    }
+                
+                # Sort by discount (ascending for least, descending for most)
+                is_least = any(word in query.lower() for word in ['least', 'lowest', 'minimum'])
+                customer_discounts.sort(key=lambda x: x[1], reverse=not is_least)
+                
+                # Get unique customers with their minimum discount
+                seen_customers = set()
+                unique_discounts = []
+                for name, discount in customer_discounts:
+                    if name not in seen_customers:
+                        seen_customers.add(name)
+                        unique_discounts.append((name, discount))
+                
+                # Build response
+                lines = [f"Customers with the {'lowest' if is_least else 'highest'} discount percentages:"]
+                for idx, (name, discount) in enumerate(unique_discounts[:10], 1):  # Show top 10
+                    lines.append(f"{idx}. {name}: {discount}%")
+                
+                # If we have customers with 0% discount, mention them specifically
+                zero_discount_customers = [name for name, disc in unique_discounts if disc == 0]
+                if zero_discount_customers:
+                    lines.append("\nNote: The following customers received no discount (0%):")
+                    lines.extend(f"- {name}" for name in zero_discount_customers[:5])
+                    if len(zero_discount_customers) > 5:
+                        lines.append(f"... and {len(zero_discount_customers) - 5} more")
+                
+                return {
+                    'success': True,
+                    'formatted_response': "\n".join(lines),
+                    'raw_results': data
+                }
+                
+            except Exception as proc_error:
+                logger.error(f"Error processing discount data: {str(proc_error)}", exc_info=True)
+                return {
+                    'success': False,
+                    'formatted_response': f"I found some data but encountered an error while processing the discount information: {str(proc_error)}",
+                    'raw_results': data
+                }
+        except Exception as e:
+            logger.error(f"Error in _process_discount_aggregation_query: {str(e)}", exc_info=True)
+            return {
+                'success': False,
+                'formatted_response': f"An error occurred while processing your discount aggregation query: {str(e)}",
+                'raw_results': []
             }
     
     def _process_single_query(self, query: str) -> Dict[str, Any]:
@@ -660,7 +836,29 @@ class AnalyticsAgent:
             List[str]: List of sub-queries
         """
         try:
-            # Special handling for customer-related queries
+            # Check if this is a discount-related query
+            if any(term in query.lower() for term in ['discount', 'discounts', 'off', '%']):
+                # For discount queries, use a direct SQL query
+                is_least = any(word in query.lower() for word in ['least', 'lowest', 'minimum'])
+                order = "ASC" if is_least else "DESC"
+                
+                # Direct SQL query to get customer discounts
+                return [f"""
+                    SELECT 
+                        c."Name" as customer_name,
+                        s."DiscountApplied" as discount_percentage,
+                        COUNT(*) as transaction_count
+                    FROM "sales_transactions" s
+                    JOIN "customer_info" c ON s."CustomerID" = c."CustomerID"
+                    WHERE s."DiscountApplied" IS NOT NULL 
+                      AND s."DiscountApplied" <> ''
+                      AND s."DiscountApplied" ~ '^[0-9]+$'  -- Only numeric values
+                    GROUP BY c."Name", s."DiscountApplied"
+                    ORDER BY CAST(s."DiscountApplied" AS INTEGER) {order}, transaction_count DESC
+                    LIMIT 10
+                """]
+                
+            # Special handling for other customer-related queries
             if any(word in query.lower() for word in ['customer', 'customers', 'buy', 'purchase', 'regularly', 'frequent']):
                 # Use simpler queries that match the database schema
                 return [

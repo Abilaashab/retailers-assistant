@@ -17,6 +17,13 @@ class DecimalEncoder(json.JSONEncoder):
 # Load environment variables
 load_dotenv()
 
+# Configure Google Generative AI with API key
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+if not GOOGLE_API_KEY:
+    raise ValueError("GOOGLE_API_KEY environment variable not found. Please set it in your .env file.")
+
+genai.configure(api_key=GOOGLE_API_KEY)
+
 # Debug flag: set via environment variable NLQ_DEBUG or fallback to False
 DEBUG = os.getenv("NLQ_DEBUG", "False").lower() in ("1", "true", "yes")
 
@@ -35,7 +42,7 @@ Database Schema Details (Note: Column names are case-sensitive):
    - "Name" (text): Name of the customer
    - "Gender" (text): Gender of the customer
    - "Age" (bigint): Age of the customer
-   - "LoyaltyCard" (text): Loyalty card information
+   - "LoyaltyCard" (text): Yes/No presence or absence of loyalty card
    - "AvgSpending" (double precision): Average spending of the customer
    - "VisitFrequency" (bigint): Frequency of visits by the customer
 
@@ -55,8 +62,8 @@ Database Schema Details (Note: Column names are case-sensitive):
    - "Product" (text): Product sold
    - "Quantity" (bigint): Quantity of the product sold
    - "Price" (double precision): Price of the product
-   - "PaymentMethod" (text): Method of payment used
-   - "DiscountApplied" (text): Any discount applied
+   - "PaymentMethod" (text): Method of payment used which can be cash/card/UPI
+   - "DiscountApplied" (text): Discount percentage applied (e.g., '10%', '15% off'). When calculating actual discount amounts, use (CAST(REPLACE(REPLACE("DiscountApplied", '%', ''), ' off', '') AS FLOAT) / 100) * ("Price" * "Quantity")
    - "EmployeeID" (bigint, FOREIGN KEY): References employee_performance("EmployeeID")
    - "CustomerID" (bigint, FOREIGN KEY): References customer_info("CustomerID")
 
@@ -67,8 +74,12 @@ Relationships:
 Query Guidelines:
 1. Always join to customer_info to get customer names when CustomerID is involved
 2. Always join to employee_performance to get employee names when EmployeeID is involved
-3. Prefer human-readable names over IDs in results
-4. Use table aliases for better readability (e.g., 'c' for customer_info, 'e' for employee_performance, 's' for sales_transactions)
+3. For discount calculations, use: 
+   - To get the discount percentage as a number: CAST(REPLACE(REPLACE("DiscountApplied", '%', ''), ' off', '') AS FLOAT)
+   - To calculate discount amount: (CAST(REPLACE(REPLACE("DiscountApplied", '%', ''), ' off', '') AS FLOAT) / 100) * ("Price" * "Quantity")
+   - To get final amount after discount: ("Price" * "Quantity") - ((CAST(REPLACE(REPLACE("DiscountApplied", '%', ''), ' off', '') AS FLOAT) / 100) * ("Price" * "Quantity"))
+4. Prefer human-readable names over IDs in results
+5. Use table aliases for better readability (e.g., 'c' for customer_info, 'e' for employee_performance, 's' for sales_transactions)
 
 Important Notes:
 1. Always use double quotes around column and table names to preserve case

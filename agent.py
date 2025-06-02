@@ -15,7 +15,7 @@ from pa_agent import PersonalAssistantAgent
 from analytics_agent import AnalyticsAgent
 import decimal
 import traceback
-from datetime import datetime
+import datetime
 
 # Configure logging
 logging.basicConfig(
@@ -75,6 +75,14 @@ class AgentState(TypedDict):
 
 # Load environment variables
 load_dotenv()
+
+# Configure Google Generative AI with API key
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+if not GOOGLE_API_KEY:
+    raise ValueError("GOOGLE_API_KEY environment variable not found. Please set it in your .env file.")
+
+import google.generativeai as genai
+genai.configure(api_key=GOOGLE_API_KEY)
 
 class EnhancedWeatherAgent:
     """Enhanced weather agent with LLM-powered location extraction and parameter selection."""
@@ -304,17 +312,33 @@ class SupervisorAgent:
                     'confidence': 0.95,
                     'reasoning': 'Identified as general conversation or greeting.'
                 }
-                
-            # Check if this is an analytics query
+            
+            # First, check for discount-related queries using the analytics agent's detection
+            if hasattr(self.analytics_agent, '_is_discount_aggregation_query'):
+                print("[DEBUG] Checking if query is a discount aggregation query...")
+                if self.analytics_agent._is_discount_aggregation_query(query):
+                    print("[DEBUG] Detected discount aggregation query, routing to analytics agent")
+                    return {
+                        'next_agent': AgentType.ANALYTICS.value,
+                        'confidence': 0.95,
+                        'reasoning': 'Detected discount aggregation query requiring special handling.'
+                    }
+            
+            # Then check if this is a general analytics query
             analytics_analysis = self.analytics_agent.analyze_query(query)
             if analytics_analysis.get('is_analytics_query', False):
+                confidence = analytics_analysis.get('confidence', 0.8)
+                if confidence < 0.85:
+                    logger.info(f"[DEBUG] Analytics routing confidence {confidence} is low. Using LLM to decide routing.")
+                    return self._llm_route_query(query)
                 return {
                     'next_agent': AgentType.ANALYTICS.value,
-                    'confidence': analytics_analysis.get('confidence', 0.8),
+                    'confidence': confidence,
                     'reasoning': 'Identified as an analytics query requiring complex analysis.'
                 }
             
             # Use LLM for routing decision for other agent types
+            logger.info("[DEBUG] Using LLM to decide routing (no agent matched).")
             return self._llm_route_query(query)
             
         except Exception as e:
@@ -795,10 +819,12 @@ def format_database_response(query: str, data: Any) -> Dict[str, str]:
             count = data[0]['transaction_count']
             return {"final_answer": f"There are {count} transactions that match your criteria."}
             
-        # Convert datetime objects to strings
+        # Convert datetime objects and Decimal to strings
         def serialize_dates(obj):
             if isinstance(obj, (datetime.date, datetime.datetime)):
                 return obj.isoformat()
+            if isinstance(obj, decimal.Decimal):
+                return float(obj)  # Convert Decimal to float for JSON serialization
             raise TypeError(f"Type {type(obj)} not serializable")
             
         # Convert data to JSON-serializable format

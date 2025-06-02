@@ -1,0 +1,92 @@
+Defaulting to user installation because normal site-packages is not writeable
+Collecting google-ai-generativelanguage
+  Using cached google_ai_generativelanguage-0.6.18-py3-none-any.whl (1.4 MB)
+Collecting google-api-core[grpc]!=2.0.*,!=2.1.*,!=2.10.*,!=2.2.*,!=2.3.*,!=2.4.*,!=2.5.*,!=2.6.*,!=2.7.*,!=2.8.*,!=2.9.*,<3.0.0,>=1.34.1
+  Using cached google_api_core-2.24.2-py3-none-any.whl (160 kB)
+Collecting google-auth!=2.24.0,!=2.25.0,<3.0.0,>=2.14.1
+  Using cached google_auth-2.40.2-py2.py3-none-any.whl (216 kB)
+Collecting proto-plus<2.0.0,>=1.22.3
+  Using cached proto_plus-1.26.1-py3-none-any.whl (50 kB)
+Collecting protobuf!=4.21.0,!=4.21.1,!=4.21.2,!=4.21.3,!=4.21.4,!=4.21.5,<7.0.0,>=3.20.2
+  Using cached protobuf-6.31.1-cp39-abi3-manylinux2014_x86_64.whl (321 kB)
+Collecting googleapis-common-protos<2.0.0,>=1.56.2
+  Using cached googleapis_common_protos-1.70.0-py3-none-any.whl (294 kB)
+Collecting requests<3.0.0,>=2.18.0
+  Downloading requests-2.32.3-py3-none-any.whl (64 kB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 64.9/64.9 KB 2.9 MB/s eta 0:00:00
+Collecting grpcio-status<2.0.dev0,>=1.33.2
+  Using cached grpcio_status-1.71.0-py3-none-any.whl (14 kB)
+Collecting grpcio<2.0dev,>=1.33.2
+  Using cached grpcio-1.71.0-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (5.9 MB)
+Collecting rsa<5,>=3.1.4
+  Using cached rsa-4.9.1-py3-none-any.whl (34 kB)
+Collecting cachetools<6.0,>=2.0.0
+  Using cached cachetools-5.5.2-py3-none-any.whl (10 kB)
+Collecting pyasn1-modules>=0.2.1
+  Using cached pyasn1_modules-0.4.2-py3-none-any.whl (181 kB)
+Collecting protobuf!=4.21.0,!=4.21.1,!=4.21.2,!=4.21.3,!=4.21.4,!=4.21.5,<7.0.0,>=3.20.2
+  Using cached protobuf-5.29.5-cp38-abi3-manylinux2014_x86_64.whl (319 kB)
+Collecting pyasn1<0.7.0,>=0.6.1
+  Using cached pyasn1-0.6.1-py3-none-any.whl (83 kB)
+Collecting certifi>=2017.4.17
+  Downloading certifi-2025.4.26-py3-none-any.whl (159 kB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 159.6/159.6 KB 5.5 MB/s eta 0:00:00
+Collecting charset-normalizer<4,>=2
+  Downloading charset_normalizer-3.4.2-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (149 kB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 149.5/149.5 KB 7.0 MB/s eta 0:00:00
+Collecting urllib3<3,>=1.21.1
+  Downloading urllib3-2.4.0-py3-none-any.whl (128 kB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 128.7/128.7 KB 6.8 MB/s eta 0:00:00
+Collecting idna<4,>=2.5
+  Downloading idna-3.10-py3-none-any.whl (70 kB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 70.4/70.4 KB 11.6 MB/s eta 0:00:00
+Installing collected packages: urllib3, pyasn1, protobuf, idna, grpcio, charset-normalizer, certifi, cachetools, rsa, requests, pyasn1-modules, proto-plus, googleapis-common-protos, grpcio-status, google-auth, google-api-core, google-ai-generativelanguage
+  Attempting uninstall: pyasn1
+    Found existing installation: pyasn1 0.6.1
+    Uninstalling pyasn1-0.6.1:
+      Successfully uninstalled pyasn1-0.6.1
+  Attempting uninstall: protobuf
+    Found existing installation: protobuf 5.29.5
+    Uninstalling protobuf-5.29.5:
+      Successfully uninstalled protobuf-5.29.5
+  Attempting uninstall: grpcio
+    Found existing installation: grpcio 1.71.0
+    Uninstalling grpcio-1.71.0:
+      Successfully uninstalled grpcio-1.71.0
+  Attempting uninstall: cachetools
+    Found existing installation: cachetools 5.5.2
+    Uninstalling cachetools-5.5.2:
+      Successfully uninstalled cachetools-5.5.2
+  Attempting uninstall: rsa
+    Found existing installation: rsa 4.9.1
+    Uninstalling rsa-4.9.1:
+      Successfully uninstalled rsa-4.9.1
+  Attempting uninstall: pyasn1-modules
+    Found existing installation: pyasn1_modules 0.4.2
+    Uninstalling pyasn1_modules-0.4.2:
+      Successfully uninstalled pyasn1_modules-0.4.2
+  Attempting uninstall: proto-plus
+    Found existing installation: proto-plus 1.26.1
+    Uninstalling proto-plus-1.26.1:
+      Successfully uninstalled proto-plus-1.26.1
+  Attempting uninstall: googleapis-common-protos
+    Found existing installation: googleapis-common-protos 1.70.0
+    Uninstalling googleapis-common-protos-1.70.0:
+      Successfully uninstalled googleapis-common-protos-1.70.0
+  Attempting uninstall: grpcio-status
+    Found existing installation: grpcio-status 1.71.0
+    Uninstalling grpcio-status-1.71.0:
+      Successfully uninstalled grpcio-status-1.71.0
+  Attempting uninstall: google-auth
+    Found existing installation: google-auth 2.40.2
+    Uninstalling google-auth-2.40.2:
+      Successfully uninstalled google-auth-2.40.2
+  Attempting uninstall: google-api-core
+    Found existing installation: google-api-core 2.24.2
+    Uninstalling google-api-core-2.24.2:
+      Successfully uninstalled google-api-core-2.24.2
+  Attempting uninstall: google-ai-generativelanguage
+    Found existing installation: google-ai-generativelanguage 0.6.15
+    Uninstalling google-ai-generativelanguage-0.6.15:
+      Successfully uninstalled google-ai-generativelanguage-0.6.15
+Successfully installed cachetools-5.5.2 certifi-2025.4.26 charset-normalizer-3.4.2 google-ai-generativelanguage-0.6.18 google-api-core-2.24.2 google-auth-2.40.2 googleapis-common-protos-1.70.0 grpcio-1.71.0 grpcio-status-1.71.0 idna-3.10 proto-plus-1.26.1 protobuf-5.29.5 pyasn1-0.6.1 pyasn1-modules-0.4.2 requests-2.32.3 rsa-4.9.1 urllib3-2.4.0
