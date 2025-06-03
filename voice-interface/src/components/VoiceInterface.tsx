@@ -7,6 +7,8 @@ import { toBcp47Code } from '@/config';
 interface Message {
   role: 'user' | 'assistant';
   content: string;
+  originalContent?: string;
+  translatedContent?: string;
   isError?: boolean;
 };
 
@@ -116,9 +118,9 @@ export default function VoiceInterface() {
     }
   };
 
-  const handleSubmit = async (text: string, audioData?: string) => {
+  const handleSubmit = async (inputText: string, audioData?: string) => {
     const isAudio = !!audioData;
-    if (!text.trim() && !audioData) return;
+    if (!inputText.trim() && !audioData) return;
 
     console.log('Submitting:', isAudio ? 'Audio' : 'Text');
     console.log('Selected language:', selectedLanguage);
@@ -126,7 +128,8 @@ export default function VoiceInterface() {
     // Add user message to conversation
     const userMessage: Message = { 
       role: 'user', 
-      content: isAudio ? '[Audio message]' : text 
+      content: isAudio ? '[Audio message]' : inputText,
+      originalContent: isAudio ? '' : inputText
     };
     
     setConversation(prev => [...prev, userMessage]);
@@ -137,7 +140,7 @@ export default function VoiceInterface() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          text: isAudio ? '' : text,
+          text: isAudio ? '' : inputText,
           sourceLang: selectedLanguage,
           targetLang: 'en', // Always translate to English for the supervisor agent
           isAudio,
@@ -157,16 +160,24 @@ export default function VoiceInterface() {
       // Add bot response to conversation
       const botResponse: Message = {
         role: 'assistant',
-        content: data.translated_text || 'No response content'
+        content: data.agent_response || data.translated_text || 'No response content',
+        originalContent: data.original_text,
+        translatedContent: data.translated_text
       };
       
-      setConversation(prev => [...prev, botResponse]);
-      
-      // Play TTS if available
-      if (data.audioUrl) {
-        const audio = new Audio(data.audioUrl);
-        audio.play().catch(e => console.error('Error playing audio:', e));
+      // Update the user message with translated content if available
+      if (data.translated_text && data.translated_text !== inputText) {
+        setConversation(prev => {
+          const updated = [...prev];
+          const lastUserMessage = updated[updated.length - 1];
+          if (lastUserMessage.role === 'user') {
+            lastUserMessage.translatedContent = data.translated_text;
+          }
+          return updated;
+        });
       }
+      
+      setConversation(prev => [...prev, botResponse]);
       
     } catch (error) {
       console.error('Error:', error);
@@ -231,9 +242,27 @@ export default function VoiceInterface() {
                     }`}
                   >
                     <div className="text-sm font-medium mb-1">
-                      {message.role === 'user' ? 'You' : 'Assistant'}
+                      {message.role === 'user' ? 'You' : 'Xenie'}
                     </div>
-                    <div className="whitespace-pre-wrap">{message.content}</div>
+                    
+                    {/* Show original text if it's different from content */}
+                    {message.role === 'user' && message.originalContent && message.originalContent !== message.content && (
+                      <div className="mb-2 text-sm opacity-80">
+                        {message.originalContent}
+                      </div>
+                    )}
+                    
+                    {/* Show translated text for user's message */}
+                    {message.role === 'user' && message.translatedContent && message.translatedContent !== message.originalContent && (
+                      <div className="mb-2 text-sm italic">
+                        {message.translatedContent}
+                      </div>
+                    )}
+                    
+                    {/* Main message content */}
+                    <div className="whitespace-pre-wrap">
+                      {message.content}
+                    </div>
                   </div>
                 </div>
               ))}
