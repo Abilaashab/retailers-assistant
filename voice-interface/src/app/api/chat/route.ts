@@ -9,12 +9,13 @@ if (!apiKey) {
 }
 
 type ChatRequest = {
-  text: string;
-  sourceLang: string;
-  targetLang: string;
+  text?: string;
+  sourceLang?: string;
+  targetLang?: string;
   isAudio?: boolean;
   audioData?: string; // Base64 encoded audio data
   audioFormat?: string; // e.g., 'audio/wav', 'audio/mp3'
+  skipTranslation?: boolean; // Flag to skip translation for English inputs
 };
 
 type SarvamSpeechToTextResponse = {
@@ -276,7 +277,13 @@ export async function POST(request: Request) {
   try {
     // Parse the request body
     const requestData: ChatRequest = await request.json();
-    const { text, sourceLang, targetLang = 'en', isAudio = false, audioData, audioFormat } = requestData;
+    const { text, sourceLang, targetLang = 'en', isAudio = false, audioData, audioFormat, skipTranslation = false } = requestData;
+
+    console.log('Received chat request');
+    console.log('Request type:', isAudio ? 'Audio' : 'Text');
+    console.log('Source Lang:', sourceLang);
+    console.log('Target Lang:', targetLang);
+    console.log('Skip Translation:', skipTranslation);
 
     console.log('Received chat request');
     console.log('Request type:', isAudio ? 'Audio' : 'Text');
@@ -309,48 +316,47 @@ export async function POST(request: Request) {
       let result: ChatResponse;
       
       if (isAudio && audioData) {
-        // For audio input, first transcribe and translate to English
-        const audioResult = await processAudio(audioData, audioFormat || 'audio/wav', sourceLang || 'en', 'en');
-        
-        // Call supervisor agent with the translated text
-        const agentResponse = await callSupervisorAgent(audioResult.translated_text);
-        
-        // If the target language is not English, translate the agent's response back
-        let finalResponse = agentResponse.response;
-        if (targetLang !== 'en') {
-          const translatedResponse = await processText(agentResponse.response, 'en', targetLang);
-          finalResponse = translatedResponse.translated_text;
-        }
-        
-        result = {
-          ...audioResult,
-          agent_response: finalResponse,
-          target_lang: targetLang
-        };
+        console.log('Processing audio input');
+        result = await processAudio(audioData, audioFormat || 'audio/wav', sourceLang || 'en', 'en');
       } else if (text) {
-        // For text input, first translate to English if needed
-        const translationResult = await processText(text, sourceLang || 'en', 'en');
+        console.log('Processing text input:', text);
         
-        // Call supervisor agent with the translated text
-        const agentResponse = await callSupervisorAgent(translationResult.translated_text);
-        
-        // If the target language is not English, translate the agent's response back
-        let finalResponse = agentResponse.response;
-        if (targetLang !== 'en') {
-          const translatedResponse = await processText(agentResponse.response, 'en', targetLang);
-          finalResponse = translatedResponse.translated_text;
+        const effectiveSourceLang = sourceLang || 'en';
+        // Skip translation if source language is English or explicitly requested
+        if (skipTranslation || effectiveSourceLang.startsWith('en')) {
+          console.log('Skipping translation for English input');
+          result = {
+            transcript: text,
+            translated_text: text, // Use original text as translated text
+            source_lang: 'en-IN',
+            target_lang: 'en-IN',
+            is_simulated: false,
+            request_id: 'skipped-translation',
+            language_code: 'en-IN'
+          };
+        } else {
+          result = await processText(text, effectiveSourceLang, 'en');
         }
-        
-        // Return both the original and translated text
-        result = {
-          ...translationResult,
-          original_text: text,
-          agent_response: finalResponse,
-          target_lang: targetLang
-        };
       } else {
-        throw new Error('Invalid request: either text or audio data must be provided');
+        throw new Error('No text or audio data provided');
       }
+      
+      // Call supervisor agent with the translated text
+      const agentResponse = await callSupervisorAgent(result.translated_text);
+      
+      // If the target language is not English, translate the agent's response back
+      let finalResponse = agentResponse.response;
+      if (targetLang && targetLang !== 'en') {
+        const translatedResponse = await processText(agentResponse.response, 'en', targetLang);
+        finalResponse = translatedResponse.translated_text;
+      }
+      
+      result = {
+        ...result,
+        original_text: text,
+        agent_response: finalResponse,
+        target_lang: targetLang
+      };
       
       return NextResponse.json(result);
       

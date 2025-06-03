@@ -136,17 +136,27 @@ export default function VoiceInterface() {
     setIsProcessing(true);
 
     try {
+      // Skip translation if input language is English
+      const isEnglishInput = selectedLanguage.startsWith('en');
+      const requestBody = {
+        text: isAudio ? '' : inputText,
+        sourceLang: selectedLanguage,
+        targetLang: isEnglishInput ? '' : 'en', // Empty targetLang means skip translation
+        isAudio,
+        audioData,
+        audioFormat: 'audio/wav',
+        skipTranslation: isEnglishInput // Add flag to indicate we want to skip translation
+      };
+
+      console.log('Sending request with body:', {
+        ...requestBody,
+        audioData: audioData ? '[audio data]' : undefined
+      });
+
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          text: isAudio ? '' : inputText,
-          sourceLang: selectedLanguage,
-          targetLang: 'en', // Always translate to English for the supervisor agent
-          isAudio,
-          audioData,
-          audioFormat: 'audio/wav'
-        })
+        body: JSON.stringify(requestBody)
       });
 
       if (!response.ok) {
@@ -245,24 +255,30 @@ export default function VoiceInterface() {
                       {message.role === 'user' ? 'You' : 'Xenie'}
                     </div>
                     
-                    {/* Show original text if it's different from content */}
-                    {message.role === 'user' && message.originalContent && message.originalContent !== message.content && (
-                      <div className="mb-2 text-sm opacity-80">
-                        {message.originalContent}
-                      </div>
+                    {/* For user messages, show original text first, then translated text */}
+                    {message.role === 'user' && (
+                      <>
+                        {/* Original text */}
+                        <div className="whitespace-pre-wrap mb-2">
+                          {message.originalContent || message.content}
+                        </div>
+                        
+                        {/* Translated text with prefix */}
+                        {message.translatedContent && message.translatedContent !== (message.originalContent || message.content) && (
+                          <div className="text-sm italic border-t border-white/20 pt-2 mt-2">
+                            <span className="opacity-70">(Translated) </span>
+                            {message.translatedContent}
+                          </div>
+                        )}
+                      </>
                     )}
                     
-                    {/* Show translated text for user's message */}
-                    {message.role === 'user' && message.translatedContent && message.translatedContent !== message.originalContent && (
-                      <div className="mb-2 text-sm italic">
-                        {message.translatedContent}
+                    {/* For assistant messages, just show the content */}
+                    {message.role === 'assistant' && (
+                      <div className="whitespace-pre-wrap">
+                        {message.content}
                       </div>
                     )}
-                    
-                    {/* Main message content */}
-                    <div className="whitespace-pre-wrap">
-                      {message.content}
-                    </div>
                   </div>
                 </div>
               ))}
@@ -400,11 +416,11 @@ export default function VoiceInterface() {
                 type="text"
                 name="textInput"
                 placeholder="Or type your message here..."
-                className={`flex-1 px-4 py-2 border ${
+                className={`flex-1 px-4 py-2 border text-gray-900 ${
                   isProcessing || isListening || isRecording
                     ? 'border-gray-200 bg-gray-50 cursor-not-allowed'
                     : 'border-gray-300 focus:ring-2 focus:ring-indigo-500 focus:border-transparent'
-                } rounded-l-md focus:outline-none transition-colors`}
+                } rounded-l-md focus:outline-none transition-colors placeholder-gray-500`}
                 disabled={isProcessing || isListening || isRecording}
               />
               <button
