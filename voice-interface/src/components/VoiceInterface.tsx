@@ -77,6 +77,14 @@ export default function VoiceInterface() {
     isMicrophoneAvailable
   } = useSpeechRecognition();
 
+  // Add a ref to store the latest transcript
+  const transcriptRef = useRef('');
+  
+  // Update the ref whenever transcript changes
+  useEffect(() => {
+    transcriptRef.current = transcript;
+  }, [transcript]);
+
   const handleTextSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const form = e.target as HTMLFormElement;
@@ -89,18 +97,49 @@ export default function VoiceInterface() {
     }
   };
   
-  const toggleListening = () => {
+  const toggleListening = async () => {
     if (isListening) {
+      console.log('Stopping voice recognition...');
       SpeechRecognition.stopListening();
       setIsListening(false);
+      console.log('Voice recognition stopped');
+      
+      // Only submit if there's actual text in the transcript
+      if (transcriptRef.current.trim()) {
+        console.log('Submitting transcript:', transcriptRef.current);
+        await handleSubmit(transcriptRef.current);
+        resetTranscript();
+      }
     } else {
-      resetTranscript();
-      SpeechRecognition.startListening({
-        language: selectedLanguage,
-      });
-      setIsListening(true);
+      console.log('Starting voice recognition with language:', selectedLanguage);
+      try {
+        resetTranscript();
+        await SpeechRecognition.startListening({
+          language: selectedLanguage,
+          continuous: false, // Changed to false to auto-stop after speech ends
+        });
+        setIsListening(true);
+        console.log('Voice recognition started');
+      } catch (error) {
+        console.error('Error starting voice recognition:', error);
+        setConversation(prev => [...prev, { 
+          role: 'assistant', 
+          content: 'Error starting voice recognition. Please check your microphone permissions.', 
+          isError: true 
+        }]);
+      }
     }
   };
+  
+  useEffect(() => {
+    if (transcript) {
+      console.log('Transcript updated:', transcript);
+    }
+  }, [transcript]);
+  
+  useEffect(() => {
+    console.log('Recording state changed - isRecording:', isRecording, 'isListening:', isListening);
+  }, [isRecording, isListening]);
   
   const handleSubmit = async (text: string, audioData?: string) => {
     if ((!text && !audioData) || isProcessing) return;
@@ -184,31 +223,77 @@ export default function VoiceInterface() {
   };
   
   const startAudioRecording = async () => {
+    console.log('Starting audio recording...');
     try {
+      console.log('Requesting microphone access...');
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      console.log('Microphone access granted, initializing recorder...');
+      
       audioChunks.current = [];
       
-      mediaRecorder.current = new MediaRecorder(stream);
+      mediaRecorder.current = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
+      console.log('MediaRecorder created with state:', mediaRecorder.current.state);
+      
       mediaRecorder.current.ondataavailable = (event) => {
+        console.log('Data available event, size:', event.data.size);
         if (event.data.size > 0) {
           audioChunks.current.push(event.data);
         }
       };
       
-      mediaRecorder.current.onstop = () => {
-        const audioBlob = new Blob(audioChunks.current, { type: 'audio/webm' });
-        const reader = new FileReader();
-        reader.readAsDataURL(audioBlob);
-        reader.onloadend = () => {
-          const base64data = reader.result as string;
-          handleSubmit('', base64data);
-        };
+      mediaRecorder.current.onstop = async () => {
+        console.log('MediaRecorder stopped, processing audio...');
+        try {
+          console.log('Audio chunks count:', audioChunks.current.length);
+          const audioBlob = new Blob(audioChunks.current, { type: 'audio/webm' });
+          console.log('Audio blob created, size:', audioBlob.size);
+          
+          const reader = new FileReader();
+          
+          reader.onloadend = () => {
+            console.log('FileReader loaded audio data');
+            const base64data = reader.result as string;
+            console.log('Audio data length:', base64data.length);
+            handleSubmit('', base64data);
+          };
+          
+          reader.onerror = (error) => {
+            console.error('Error reading audio data:', error);
+            setConversation(prev => [...prev, { 
+              role: 'assistant', 
+              content: 'Error processing the audio. Please try again.', 
+              isError: true 
+            }]);
+          };
+          
+          console.log('Starting to read audio blob as data URL...');
+          reader.readAsDataURL(audioBlob);
+        } catch (error) {
+          console.error('Error in onstop handler:', error);
+          setConversation(prev => [...prev, { 
+            role: 'assistant', 
+            content: 'Error processing the audio. Please try again.', 
+            isError: true 
+          }]);
+        }
       };
       
-      mediaRecorder.current.start();
+      mediaRecorder.current.onerror = (event) => {
+        console.error('MediaRecorder error:', event);
+        setConversation(prev => [...prev, { 
+          role: 'assistant', 
+          content: 'Error recording audio. Please try again.', 
+          isError: true 
+        }]);
+      };
+      
+      console.log('Starting MediaRecorder...');
+      mediaRecorder.current.start(100);
+      console.log('MediaRecorder started, state:', mediaRecorder.current.state);
       setIsRecording(true);
+      console.log('Audio recording started');
     } catch (error) {
-      console.error('Error starting audio recording:', error);
+      console.error('Error in startAudioRecording:', error);
       const errorMessage = 'Could not access microphone. Please ensure you have granted microphone permissions.';
       setConversation(prev => [...prev, { role: 'assistant', content: errorMessage, isError: true }]);
     }
@@ -217,8 +302,12 @@ export default function VoiceInterface() {
   const stopAudioRecording = () => {
     if (mediaRecorder.current && mediaRecorder.current.state !== 'inactive') {
       mediaRecorder.current.stop();
-      mediaRecorder.current.stream.getTracks().forEach(track => track.stop());
+      mediaRecorder.current.stream.getTracks().forEach(track => {
+        track.stop();
+        track.enabled = false;
+      });
       setIsRecording(false);
+      console.log('Stopped audio recording');
     }
   };
   
@@ -320,7 +409,7 @@ export default function VoiceInterface() {
       setIsSpeaking(false);
     }
   };
-  
+
   return (
     <div className="min-h-screen bg-gray-50 p-4">
       <div className="max-w-4xl mx-auto">

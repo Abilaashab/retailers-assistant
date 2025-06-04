@@ -178,14 +178,27 @@ async function processAudio(audioData: string, audioFormat: string, sourceLang: 
     throw new Error('API key not configured');
   }
   
-  // Debug: Log API key status (redacted for security)
-  console.log('API Key configured:', apiKey ? '[REDACTED]' : 'Not found');
-  console.log('API Key header name:', SARVAM_CONFIG.API_KEY_HEADER);
-
-  // Use the direct API endpoint for speech-to-text translation
-  const apiUrl = 'https://api.sarvam.ai/speech/translate';
+  console.log('Processing audio data, length:', audioData.length);
+  
+  // Extract base64 data if it's a data URL
+  const base64Data = audioData.startsWith('data:') 
+    ? audioData.split(',')[1] 
+    : audioData;
+  
+  // Convert base64 to ArrayBuffer
+  const byteString = atob(base64Data);
+  const ab = new ArrayBuffer(byteString.length);
+  const ia = new Uint8Array(ab);
+  
+  for (let i = 0; i < byteString.length; i++) {
+    ia[i] = byteString.charCodeAt(i);
+  }
+  
+  const blob = new Blob([ab], { type: audioFormat || 'audio/webm' });
+  
   // Format language codes for Sarvam AI
   const formatLanguageCode = (lang: string): string => {
+    if (!lang) return 'en-IN';
     if (lang.includes('-')) return lang;
     
     const langMap: Record<string, string> = {
@@ -209,26 +222,12 @@ async function processAudio(audioData: string, audioFormat: string, sourceLang: 
   const sourceLangCode = formatLanguageCode(sourceLang);
   const targetLangCode = formatLanguageCode(targetLang);
   
-
-  
-  // Convert base64 to blob
-  const byteString = atob(audioData.split(',')[1]);
-  const mimeString = audioFormat || 'audio/wav';
-  const ab = new ArrayBuffer(byteString.length);
-  const ia = new Uint8Array(ab);
-  
-  for (let i = 0; i < byteString.length; i++) {
-    ia[i] = byteString.charCodeAt(i);
-  }
-  
-  const blob = new Blob([ab], { type: mimeString });
-  
   const formData = new FormData();
-  formData.append('file', blob, 'recording.wav');
+  formData.append('file', blob, 'recording.webm');
   formData.append('source_language', sourceLangCode);
   formData.append('target_language', targetLangCode);
   formData.append('speaker_gender', 'Male');
-  formData.append('mode', 'formal');
+  formData.append('mode', 'modern-colloquial');
   formData.append('enable_preprocessing', 'true');
   formData.append('numerals_format', 'international');
 
@@ -236,31 +235,34 @@ async function processAudio(audioData: string, audioFormat: string, sourceLang: 
     [SARVAM_CONFIG.API_KEY_HEADER]: apiKey,
   };
 
-  const response = await fetch(apiUrl, {
+  console.log('Sending audio to speech-to-text API...');
+  const response = await fetch('https://api.sarvam.ai/transcribe/translate', {
     method: 'POST',
     headers: headers,
     body: formData,
   });
 
-  const responseData: SarvamSpeechToTextResponse = await response.json();
+  const responseData = await response.json();
   
   if (!response.ok) {
     console.error('Sarvam API error status:', response.status);
     console.error('Sarvam API error response:', responseData);
-    throw new Error(`API request failed with status ${response.status}`);
+    throw new Error(`API request failed with status ${response.status}: ${responseData?.message || 'Unknown error'}`);
   }
 
-  // Use the transcript directly as the translated text
-  // The translation should be handled by the API if source and target languages are different
+  if (!responseData.transcript) {
+    console.error('No transcript in response:', responseData);
+    throw new Error('No transcript returned from speech-to-text service');
+  }
+
   return {
     transcript: responseData.transcript,
-    translated_text: responseData.transcript,
-    source_lang: responseData.language_code || sourceLangCode,
+    translated_text: responseData.transcript, // Assuming the API returns translated text if needed
+    source_lang: sourceLangCode,
     target_lang: targetLangCode,
     is_simulated: false,
-    request_id: responseData.request_id,
-    language_code: responseData.language_code,
-    original_text: responseData.transcript // Include original transcript
+    request_id: responseData.request_id || '',
+    language_code: responseData.language_code || sourceLangCode
   };
 }
 
