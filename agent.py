@@ -469,6 +469,13 @@ def db_query_agent_node(state: AgentState) -> Dict[str, Any]:
         if not result.get("success", False):
             error_msg = result.get("error", "Unknown database error")
             logger.error(f"DB query failed: {error_msg}")
+            
+            # Provide more user-friendly error messages for common database errors
+            if "server closed the connection unexpectedly" in str(error_msg):
+                error_msg = "I'm having trouble connecting to the database. Please try again in a moment."
+            elif "connection" in str(error_msg).lower():
+                error_msg = "I couldn't connect to the database. Please try again later."
+                
             return {
                 "agent_output": {
                     "success": False,
@@ -601,9 +608,11 @@ def enhanced_final_response_node(state: AgentState) -> Dict[str, str]:
             elif error_type == "weather_api_error":
                 return {"final_answer": f"🌤️ I couldn't get the weather information. {error_msg}"}
             elif error_type == "database_error":
-                return {"final_answer": f"📊 I couldn't access the database. {error_msg}"}
+                # For database errors, use the message we've already made user-friendly
+                return {"final_answer": f"📊 {error_msg}"}
             else:
-                return {"final_answer": f"⚠️ {error_msg}"}
+                # For any other errors, provide a generic but friendly message
+                return {"final_answer": "⚠️ I encountered an issue processing your request. Please try again in a moment."}
         
         # Format successful responses based on the selected agent
         if selected_agent == AgentType.WEATHER.value:

@@ -4,10 +4,6 @@ import { SARVAM_CONFIG, toBcp47Code } from '@/config';
 // Get API key from environment variables
 const apiKey = process.env.SARVAM_AI_API || process.env.NEXT_PUBLIC_SARVAM_AI_API;
 
-if (!apiKey) {
-  console.error('Sarvam AI API key is not set. Please set SARVAM_AI_API environment variable.');
-}
-
 type ChatRequest = {
   text?: string;
   sourceLang?: string;
@@ -59,11 +55,7 @@ async function processText(text: string, sourceLang: string, targetLang: string)
   console.log('API Key configured:', apiKey ? '[REDACTED]' : 'Not found');
   console.log('API Key header name:', SARVAM_CONFIG.API_KEY_HEADER);
 
-  // Use the direct API endpoint for translation
-  const apiUrl = 'https://api.sarvam.ai/translate';
-  
   // Convert language codes to the format expected by Sarvam AI
-  // Ensure language codes are in the format 'xx-XX' as required by the API
   const formatLanguageCode = (lang: string): string => {
     // If already in xx-XX format, return as is
     if (lang.includes('-')) return lang;
@@ -90,6 +82,20 @@ async function processText(text: string, sourceLang: string, targetLang: string)
   const sourceLangCode = formatLanguageCode(sourceLang);
   const targetLangCode = formatLanguageCode(targetLang);
 
+  // If source and target languages are the same, return the text as is
+  if (sourceLangCode === targetLangCode) {
+    return {
+      transcript: text,
+      translated_text: text,
+      source_lang: sourceLangCode,
+      target_lang: targetLangCode,
+      is_simulated: true
+    };
+  }
+
+  // Use the direct API endpoint for translation
+  const apiUrl = 'https://api.sarvam.ai/translate';
+  
   // Prepare the request body according to the API spec
   const requestBody = {
     input: text,
@@ -97,25 +103,17 @@ async function processText(text: string, sourceLang: string, targetLang: string)
     target_language_code: targetLangCode,
     // Optional parameters with defaults
     speaker_gender: 'Male',
-    mode: 'formal',
+    mode: 'modern-colloquial',
     enable_preprocessing: true,
     numerals_format: 'international',
     // Add the API key to the headers instead of the body
   };
-
-  console.log('Sending translation request to:', apiUrl);
-  console.log('Request body:', JSON.stringify(requestBody, null, 2));
 
   const headers = {
     'Content-Type': 'application/json',
     [SARVAM_CONFIG.API_KEY_HEADER]: apiKey,
     'Accept': 'application/json'
   };
-  
-  console.log('Request headers:', JSON.stringify({
-    ...headers,
-    [SARVAM_CONFIG.API_KEY_HEADER]: '[REDACTED]' // Don't log actual API key
-  }, null, 2));
 
   const response = await fetch(apiUrl, {
     method: 'POST',
@@ -211,7 +209,7 @@ async function processAudio(audioData: string, audioFormat: string, sourceLang: 
   const sourceLangCode = formatLanguageCode(sourceLang);
   const targetLangCode = formatLanguageCode(targetLang);
   
-  console.log(`Processing audio from ${sourceLangCode} to ${targetLangCode}`);
+
   
   // Convert base64 to blob
   const byteString = atob(audioData.split(',')[1]);
@@ -234,16 +232,9 @@ async function processAudio(audioData: string, audioFormat: string, sourceLang: 
   formData.append('enable_preprocessing', 'true');
   formData.append('numerals_format', 'international');
 
-  console.log('Sending audio translation request to:', apiUrl);
-  
   const headers = {
     [SARVAM_CONFIG.API_KEY_HEADER]: apiKey,
   };
-  
-  console.log('Request headers:', JSON.stringify({
-    ...headers,
-    [SARVAM_CONFIG.API_KEY_HEADER]: '[REDACTED]' // Don't log actual API key
-  }, null, 2));
 
   const response = await fetch(apiUrl, {
     method: 'POST',
@@ -279,16 +270,7 @@ export async function POST(request: Request) {
     const requestData: ChatRequest = await request.json();
     const { text, sourceLang, targetLang = 'en', isAudio = false, audioData, audioFormat, skipTranslation = false } = requestData;
 
-    console.log('Received chat request');
-    console.log('Request type:', isAudio ? 'Audio' : 'Text');
-    console.log('Source Lang:', sourceLang);
-    console.log('Target Lang:', targetLang);
-    console.log('Skip Translation:', skipTranslation);
 
-    console.log('Received chat request');
-    console.log('Request type:', isAudio ? 'Audio' : 'Text');
-    console.log('Source Lang:', sourceLang);
-    console.log('Target Lang:', targetLang);
 
     if (!apiKey) {
       console.error('Sarvam AI API key is not set');
@@ -316,15 +298,15 @@ export async function POST(request: Request) {
       let result: ChatResponse;
       
       if (isAudio && audioData) {
-        console.log('Processing audio input');
+
         result = await processAudio(audioData, audioFormat || 'audio/wav', sourceLang || 'en', 'en');
       } else if (text) {
-        console.log('Processing text input:', text);
+
         
         const effectiveSourceLang = sourceLang || 'en';
         // Skip translation if source language is English or explicitly requested
         if (skipTranslation || effectiveSourceLang.startsWith('en')) {
-          console.log('Skipping translation for English input');
+
           result = {
             transcript: text,
             translated_text: text, // Use original text as translated text
@@ -341,30 +323,59 @@ export async function POST(request: Request) {
         throw new Error('No text or audio data provided');
       }
       
+
+      
       // Call supervisor agent with the translated text
-      const agentResponse = await callSupervisorAgent(result.translated_text);
-      
-      // If the target language is not English, translate the agent's response back
-      let finalResponse = agentResponse.response;
-      if (targetLang && targetLang !== 'en') {
-        const translatedResponse = await processText(agentResponse.response, 'en', targetLang);
-        finalResponse = translatedResponse.translated_text;
+      let agentResponse;
+      try {
+        agentResponse = await callSupervisorAgent(result.translated_text);
+
+        
+        if (agentResponse.error) {
+          throw new Error(agentResponse.error);
+        }
+        
+        // If the target language is not English, try to translate the agent's response back
+        let finalResponse = agentResponse.response;
+        if (targetLang && targetLang !== 'en') {
+          try {
+
+            const translatedResponse = await processText(agentResponse.response, 'en', targetLang);
+            if (translatedResponse && translatedResponse.translated_text) {
+              finalResponse = translatedResponse.translated_text;
+
+            }
+          } catch (translationError) {
+            console.error('Error translating response:', translationError);
+            // Continue with English response if translation fails
+            finalResponse = agentResponse.response;
+          }
+        }
+        
+        result = {
+          ...result,
+          original_text: text,
+          agent_response: finalResponse,
+          target_lang: targetLang
+        };
+        
+        return NextResponse.json(result);
+        
+      } catch (agentError) {
+        console.error('Error calling supervisor agent:', agentError);
+        // Return the original translation result with an error message
+        return NextResponse.json({
+          ...result,
+          error: agentError instanceof Error ? agentError.message : 'Error processing request',
+          agent_response: agentError instanceof Error ? agentError.message : 'Error processing request'
+        });
       }
-      
-      result = {
-        ...result,
-        original_text: text,
-        agent_response: finalResponse,
-        target_lang: targetLang
-      };
-      
-      return NextResponse.json(result);
       
     } catch (apiError) {
       console.error('Error processing request:', apiError);
       
       // Fallback to simulated response if API call fails
-      console.warn('Falling back to simulated response');
+      // Fallback to simulated response
       const errorMessage = apiError instanceof Error ? apiError.message : 'Unknown error';
       const simulatedResponse: ChatResponse = {
         transcript: isAudio ? '[Audio processing failed]' : text || '',
