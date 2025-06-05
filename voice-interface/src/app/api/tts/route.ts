@@ -1,6 +1,22 @@
 import { NextResponse } from 'next/server';
 import { SARVAM_CONFIG, toBcp47Code } from '@/config';
 
+// Function to clean text for TTS by removing emojis and certain special characters
+function cleanTextForTTS(text: string): string {
+  // Remove emojis and other special characters but keep basic punctuation
+  return text
+    // Remove emojis
+    .replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, '')
+    // Remove other special characters that might affect TTS
+    .replace(/[\u2018\u2019]/g, "'") // Replace smart quotes with straight quotes
+    .replace(/[\u201C\u201D]/g, '"')
+    // Remove colons and semicolons that aren't part of time or other meaningful patterns
+    .replace(/(?<!(\d{1,2}:\d{2})|(https?:\/\/)|(mailto:))[:;]/g, '')
+    // Remove multiple spaces and trim
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 // Get API key from environment variables
 const apiKey = process.env.SARVAM_AI_API || process.env.NEXT_PUBLIC_SARVAM_AI_API;
 
@@ -23,7 +39,7 @@ export async function POST(request: Request) {
     }
 
     const requestData = await request.json();
-    const { text, language_code, voice, sample_rate }: TTSRequest = requestData;  // Changed from voice_id to voice
+    let { text, language_code, voice, sample_rate }: TTSRequest = requestData;  // Changed from voice_id to voice
 
     if (!text) {
       const errorMsg = 'Text is required for text-to-speech conversion';
@@ -33,6 +49,9 @@ export async function POST(request: Request) {
         { status: 400 }
       );
     }
+
+    // Clean the text for TTS
+    text = cleanTextForTTS(text);
 
     // Get the base language code (e.g., 'en' from 'en-IN')
     const baseLang = language_code ? language_code.split('-')[0].toLowerCase() : 'en';
