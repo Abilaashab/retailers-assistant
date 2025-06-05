@@ -505,9 +505,16 @@ export default function VoiceInterface() {
                     
                     {/* For assistant messages, just show the content */}
                     {message.role === 'assistant' && (
-                      <div className="whitespace-pre-wrap">
-                        {message.content}
-                      </div>
+                      <div 
+                        className="whitespace-pre-wrap"
+                        dangerouslySetInnerHTML={{
+                          __html: message.content
+                            .replace(/📰/g, '<span class="text-xl">📰</span>')
+                            .replace(/\*([^*]+)\*/g, '<span class="font-bold">$1</span>')
+                            .replace(/\[(.*?)\]\((.*?)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="text-blue-400 hover:text-blue-300 underline">$1</a>')
+                            .replace(/\n/g, '<br/>')
+                        }}
+                      />
                     )}
                   </div>
                 </div>

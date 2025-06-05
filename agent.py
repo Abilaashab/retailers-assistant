@@ -257,7 +257,7 @@ class SupervisorAgent:
     
     def __init__(self):
         self.llm = ChatGoogleGenerativeAI(
-            model="gemini-1.5-flash", 
+            model="gemini-1.5-pro", 
             temperature=0,
             max_retries=3
         )
@@ -270,7 +270,13 @@ class SupervisorAgent:
                 name="db_query_agent",
                 description="Handles database queries, analytics, and data retrieval operations",
                 keywords=["data", "database", "query", "analytics", "sales", "users", "records", 
-                         "count", "sum", "average", "report", "statistics", "metrics"],
+                         "count", "sum", "average", "report", "statistics", "metrics","sell","stock",
+                         "buy","income","revenue","profit","expense","transaction","how much did i earn",
+                         "what's my earnings","show me my","total for","sum of","average","count of",
+                         "report on","data for","metrics for","statistics for","analysis of","financial",
+                         "monthly income","quarterly report","yearly earnings","my sales","my performance",
+                         "my numbers","customers","employees","product","order"
+                         ],
                 priority=1
             ),
             AgentType.WEATHER.value: AgentConfig(
@@ -312,9 +318,14 @@ class SupervisorAgent:
         }
     
     def route_query(self, query: str) -> Dict[str, Any]:
-        """Enhanced routing logic with LLM assistance."""
+        """Enhanced routing logic with keyword matching first, then LLM, then fallback."""
         try:
-            # First, check if this is a greeting or general query
+            # Try keyword-based routing first
+            keyword_result = self._keyword_route_query(query)
+            if keyword_result.get("confidence", 0) >= 0.4:
+                return keyword_result
+            
+            # Then check if this is a greeting or general query
             if self._is_general_query(query):
                 return {
                     "agent": AgentType.PERSONAL_ASSISTANT.value,
@@ -322,20 +333,19 @@ class SupervisorAgent:
                     "reasoning": "General query or greeting detected",
                     "method": "direct"
                 }
-                
-            # Use LLM for intelligent routing
-            result = self._llm_route_query(query)
             
-            # If confidence is too low, default to personal assistant
-            if result.get("confidence", 0) < 0.4:
-                return {
-                    "agent": AgentType.PERSONAL_ASSISTANT.value,
-                    "confidence": 0.7,
-                    "reasoning": f"Low confidence in agent selection: {result.get('reasoning', 'No reasoning provided')}",
-                    "method": "fallback"
-                }
-                
-            return result
+            # If keyword routing fails or has low confidence, try LLM routing
+            llm_result = self._llm_route_query(query)
+            if llm_result.get("confidence", 0) >= 0.4:
+                return llm_result
+            
+            # If both keyword and LLM routing fail, fallback to personal assistant
+            return {
+                "agent": AgentType.PERSONAL_ASSISTANT.value,
+                "confidence": 0.7,
+                "reasoning": "Fallback after low confidence from both keyword and LLM routing",
+                "method": "fallback"
+            }
             
         except Exception as e:
             logger.error(f"Error in routing: {str(e)}")
@@ -346,7 +356,7 @@ class SupervisorAgent:
                 "reasoning": f"Fallback to personal assistant due to error: {str(e)}",
                 "method": "error_fallback"
             }
-            
+    
     def _is_general_query(self, query: str) -> bool:
         """Check if the query is a general conversation or greeting."""
         if not query or not query.strip():
@@ -383,8 +393,8 @@ class SupervisorAgent:
             
         return False
     
-    def _llm_route_query(self, query: str) -> Dict[str, Any]:
-        """Use LLM for routing decisions with enhanced query detection."""
+    def _keyword_route_query(self, query: str) -> Dict[str, Any]:
+        """Keyword-based routing logic."""
         query_lower = query.lower()
         
         # Check for common horoscope-related questions
@@ -397,9 +407,7 @@ class SupervisorAgent:
             "advice for today", "daily advice", "guidance for today", "prediction",
             "fortune", "what the stars say", "cosmic guidance", "astral forecast",
             "horoscope", "zodiac", "astrology", "star sign", "birth sign",
-            # Patterns for queries about specific signs
             "day today for ", "horoscope for ", "zodiac for ", "sign for ",
-            # All zodiac signs
             "aries", "taurus", "gemini", "cancer", "leo", "virgo", 
             "libra", "scorpio", "sagittarius", "capricorn", "aquarius", "pisces"
         ]
@@ -414,24 +422,6 @@ class SupervisorAgent:
             "latest on", "recent news about", "any news about"
         ]
         
-        # Check for horoscope queries first (higher priority)
-        if any(indicator in query_lower for indicator in horoscope_indicators):
-            return {
-                "agent": AgentType.HOROSCOPE.value,
-                "confidence": 0.95,
-                "reasoning": "Query contains common horoscope-related phrases",
-                "method": "keyword"
-            }
-            
-        # Then check for news queries
-        if any(indicator in query_lower for indicator in news_indicators):
-            return {
-                "agent": AgentType.NEWS.value,
-                "confidence": 0.9,
-                "reasoning": "Query contains news-related keywords",
-                "method": "keyword"
-            }
-            
         # Check for database queries
         db_query_indicators = [
             "income", "revenue", "sales", "profit", "expense", "transaction", 
@@ -439,8 +429,35 @@ class SupervisorAgent:
             "total for", "sum of", "average", "count of", "report on",
             "data for", "metrics for", "statistics for", "analysis of",
             "financial", "monthly income", "quarterly report", "yearly earnings",
-            "my sales", "my performance", "my numbers"
+            "my sales", "my performance", "my numbers", "customers", "employees", 
+            "product", "order", "sell", "stock", "buy"
         ]
+        
+        # Check for weather queries
+        weather_indicators = [
+            "weather", "temperature", "forecast", "rain", "snow", "sunny", "cloudy", 
+            "humidity", "wind", "storm", "degrees", "hot", "cold", "chance of rain",
+            "how's the weather", "what's the weather", "will it rain", 
+            "is it going to rain", "do i need an umbrella"
+        ]
+        
+        # Check each type of query in order of priority
+        if any(indicator in query_lower for indicator in horoscope_indicators):
+            return {
+                "agent": AgentType.HOROSCOPE.value,
+                "confidence": 0.95,
+                "reasoning": "Query contains common horoscope-related phrases",
+                "method": "keyword"
+            }
+        
+        if any(indicator in query_lower for indicator in news_indicators):
+            return {
+                "agent": AgentType.NEWS.value,
+                "confidence": 0.9,
+                "reasoning": "Query contains news-related keywords",
+                "method": "keyword"
+            }
+        
         if any(indicator in query_lower for indicator in db_query_indicators):
             return {
                 "agent": AgentType.DB_QUERY.value,
@@ -448,93 +465,146 @@ class SupervisorAgent:
                 "reasoning": "Query contains database-related keywords",
                 "method": "keyword"
             }
-            
-        # Check for weather queries
-        weather_indicators = [
-            "weather", "temperature", "forecast", "rain", "snow", "sunny", "cloudy", 
-            "humidity", "wind", "storm", "degrees", "hot", "cold", "chance of rain",
-            "how's the weather", "what's the weather", "will it rain", "is it going to rain",
-            "do i need an umbrella"
-        ]
+        
         if any(indicator in query_lower for indicator in weather_indicators):
             return {
                 "agent": AgentType.WEATHER.value,
-                "confidence": 0.95,
+                "confidence": 0.9,
                 "reasoning": "Query contains weather-related keywords",
                 "method": "keyword"
             }
-            
-        agent_descriptions = "\n".join([
-            f"- {name}: {config.description}. Keywords: {', '.join(config.keywords) if config.keywords else 'N/A'}"
-            for name, config in self.agents.items()
-        ])
         
-        prompt = f"""You are an intelligent routing system. Analyze the user query and determine the most appropriate agent.
+        # If no keywords match, return low confidence
+        return {
+            "agent": AgentType.PERSONAL_ASSISTANT.value,
+            "confidence": 0.3,
+            "reasoning": "No strong keyword matches found",
+            "method": "keyword"
+        }
+    
+    def _llm_route_query(self, query: str) -> Dict[str, Any]:
+        """LLM-based routing for complex or ambiguous queries."""
+        # Create a detailed description of all available agents
+        agent_descriptions = []
+        for agent_type, config in self.agents.items():
+            agent_desc = {
+                "name": config.name,
+                "type": agent_type,
+                "description": config.description,
+                "capabilities": [
+                    "Can handle queries related to: " + ", ".join(config.keywords) if config.keywords else "General conversation and queries"
+                ],
+                "examples": self._get_agent_examples(agent_type)
+            }
+            agent_descriptions.append(agent_desc)
 
-Available agents:
-{agent_descriptions}
+        prompt = f"""You are an intelligent routing system. Analyze the user query and determine the most appropriate agent to handle it.
 
-User query: "{query}"
+Available Agents:
+{json.dumps(agent_descriptions, indent=2)}
+
+User Query: "{query}"
 
 Instructions:
-1. Route weather-related queries (temperature, rain, humidity, weather conditions, etc.) to weather_agent
-2. Route data/database queries (sales, users, analytics, reports, etc.) to db_query_agent
-3. Route ALL horoscope-related queries to horoscope_agent, including:
-   - Questions about daily horoscopes (e.g., "How is my day today?")
-   - Questions about specific zodiac signs (e.g., "What's the horoscope for Leo?")
-   - Questions about star signs, zodiac signs, or birth signs
-   - Questions asking for astrological predictions or advice
-   - Questions containing any of the 12 zodiac sign names (Aries, Taurus, etc.)
-   - Questions about what the stars say or cosmic guidance
-4. For all other general queries, conversations, greetings, or when unsure, use personal_assistant
-5. Weather queries don't need to mention specific locations - the weather agent handles location detection
-6. If the query is a greeting, general question, or doesn't fit other categories, use personal_assistant
-7. Be conservative - if you're not highly confident (>=0.8) about db_query_agent or weather_agent, default to personal_assistant
+1. Analyze the query's intent and content carefully
+2. Consider each agent's capabilities and example queries
+3. For general conversation, greetings, or uncertain queries, use personal_assistant
+4. Provide a confidence score (0.0-1.0) based on how well the query matches the chosen agent
+5. Explain your reasoning for the selection
 
-Respond with JSON:
-{
-    "agent": "agent_name",  // One of: db_query_agent, weather_agent, horoscope_agent, or personal_assistant
-    "confidence": 0.8,  // Confidence score between 0 and 1
-    "reasoning": "Brief explanation of why this agent was chosen"
-}"""
+Response Format (JSON):
+{{
+    "agent": "agent_name",  // The selected agent's type value
+    "confidence": 0.0-1.0,  // Confidence score
+    "reasoning": "Detailed explanation of why this agent was chosen",
+    "method": "llm"
+}}
+
+Please analyze the query and provide your routing decision:"""
 
         try:
             response = self.llm.invoke([HumanMessage(content=prompt)])
             content = response.content.strip()
             
-            # Extract JSON
+            # Extract JSON from response
             try:
                 if '```json' in content:
                     content = content.split('```json')[1].split('```')[0].strip()
                 elif '```' in content:
                     content = content.split('```')[1].split('```')[0].strip()
                 
-                # Ensure we have valid JSON
-                if not content.strip():
-                    raise ValueError("Empty content after JSON extraction")
-                    
                 result = json.loads(content)
-            except (json.JSONDecodeError, IndexError, ValueError) as e:
+                
+                # Validate the agent type
+                if result["agent"] not in self.agents:
+                    logger.warning(f"LLM returned invalid agent type: {result['agent']}")
+                    result["agent"] = AgentType.PERSONAL_ASSISTANT.value
+                
+                # Ensure all required fields are present
+                result.setdefault("confidence", 0.5)
+                result.setdefault("reasoning", "LLM-based routing decision")
+                result["method"] = "llm"
+                
+                return result
+                
+            except (json.JSONDecodeError, KeyError) as e:
                 logger.error(f"Failed to parse LLM response: {content}")
-                raise ValueError(f"Invalid JSON response from LLM: {str(e)}")
-            
-            if result["agent"] not in self.agents:
-                result["agent"] = AgentType.DB_QUERY.value
-            
-            result.setdefault("confidence", 0.5)
-            result.setdefault("reasoning", "LLM-based routing")
-            result["method"] = "llm"
-            
-            return result
-            
+                return {
+                    "agent": AgentType.PERSONAL_ASSISTANT.value,
+                    "confidence": 0.3,
+                    "reasoning": f"Failed to parse LLM response: {str(e)}",
+                    "method": "llm_error"
+                }
+                
         except Exception as e:
             logger.error(f"LLM routing failed: {str(e)}")
             return {
                 "agent": AgentType.PERSONAL_ASSISTANT.value,
-                "confidence": 0.1,
+                "confidence": 0.3,
                 "reasoning": f"LLM routing failed: {str(e)}",
-                "method": "fallback"
+                "method": "llm_error"
             }
+    
+    def _get_agent_examples(self, agent_type: str) -> List[str]:
+        """Get example queries for each agent type."""
+        examples = {
+            AgentType.WEATHER.value: [
+                "What's the weather like today?",
+                "Will it rain tomorrow?",
+                "What's the temperature outside?",
+                "Do I need an umbrella?",
+                "How's the weather in Paris?"
+            ],
+            AgentType.DB_QUERY.value: [
+                "Show me my sales for last month",
+                "What are my top selling products?",
+                "How much revenue did we make?",
+                "Show me customer statistics",
+                "What's my current inventory?"
+            ],
+            AgentType.HOROSCOPE.value: [
+                "What's my horoscope for today?",
+                "How will my day be?",
+                "What's in store for Libra?",
+                "Should I be careful today?",
+                "What do the stars say about my career?"
+            ],
+            AgentType.NEWS.value: [
+                "What's happening in the world?",
+                "Show me the latest headlines",
+                "Any updates on the economy?",
+                "What's new in technology?",
+                "Tell me the business news"
+            ],
+            AgentType.PERSONAL_ASSISTANT.value: [
+                "How are you today?",
+                "What can you help me with?",
+                "Tell me a joke",
+                "What's your name?",
+                "Thank you for your help"
+            ]
+        }
+        return examples.get(agent_type, [])
 
 # Enhanced node functions
 def news_agent_node(state: AgentState) -> Dict[str, Any]:
@@ -708,38 +778,17 @@ def news_agent_node(state: AgentState) -> Dict[str, Any]:
                         }
                     else:
                         response = "📰 *Latest News Updates* 📰\n\n"
-                        for i, article in enumerate(articles[:3], 1):  # Limit to 3 articles
+                        for i, article in enumerate(articles[:3], 1):
                             # Get and format title
                             title = str(article.get('title', 'No title')).strip() or 'Untitled Article'
                             title = ' '.join(title.split())  # Clean up extra whitespace and newlines
                             response += f"{i}. *{title}*\n"
                             
-                            # Get and format summary/description
-                            summary = article.get('summary') or article.get('text') or article.get('description')
-                            if summary:
-                                summary = ' '.join(str(summary).split())  # Clean up whitespace and newlines
-                                # Split into sentences and rejoin with proper spacing
-                                sentences = [s.strip() for s in summary.split('.') if s.strip()]
-                                summary = '. '.join(sentences) + ('.' if sentences else '')
-                                response += f"   {summary}\n"
-                            
-                            # Get and format source and date
-                            source = ''
-                            if 'source' in article and isinstance(article['source'], dict):
-                                source = article['source'].get('name', '')
-                            if not source:
-                                source = article.get('source_name', '')
-                            if source:
-                                response += f"   Source: {source}\n"
-
-                            pub_date = article.get('publish_date') or article.get('published_at') or article.get('date')
-                            if pub_date:
-                                response += f"   Published: {pub_date}\n"
-
+                            # Add read more link
                             url = article.get('url')
                             if url:
-                                response += f"   Read more: {url}\n"
-
+                                response += f"   [Read more]({url})\n"
+                            
                             response += "\n"
                         
                         logger.info(f"Formatted news response with {len(articles)} articles")

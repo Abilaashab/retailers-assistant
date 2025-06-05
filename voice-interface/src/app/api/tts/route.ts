@@ -7,6 +7,10 @@ function cleanTextForTTS(text: string): string {
   return text
     // Remove emojis
     .replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, '')
+    // Remove markdown formatting
+    .replace(/\*([^*]+)\*/g, '$1')
+    // Replace URLs with "Read more"
+    .replace(/Read more: https?:\/\/[^\s]+/g, 'Read more')
     // Remove other special characters that might affect TTS
     .replace(/[\u2018\u2019]/g, "'") // Replace smart quotes with straight quotes
     .replace(/[\u201C\u201D]/g, '"')
