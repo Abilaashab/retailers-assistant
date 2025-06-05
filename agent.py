@@ -12,6 +12,8 @@ from dotenv import load_dotenv
 from nlq import generate_sql_query, execute_nl_query
 from weather_agent import WeatherAgent
 from pa_agent import PersonalAssistantAgent
+from horoscope_agent import HoroscopeAgent
+from news_agent import NewsAgent, NewsArticle
 import decimal
 import traceback
 from datetime import datetime
@@ -38,6 +40,8 @@ class AgentType(Enum):
     DB_QUERY = "db_query_agent"
     WEATHER = "weather_agent"
     PERSONAL_ASSISTANT = "personal_assistant"
+    HOROSCOPE = "horoscope_agent"
+    NEWS = "news_agent"
 
 # Enhanced weather query analysis dataclass
 @dataclass
@@ -60,7 +64,7 @@ class AgentConfig:
 # Improved state schema with better typing
 class AgentState(TypedDict):
     messages: Annotated[List[Union[HumanMessage, AIMessage]], lambda x, y: x + y]
-    next: Literal["supervisor", "db_query_agent", "weather_agent", "personal_assistant", END]
+    next: Literal["supervisor", "db_query_agent", "weather_agent", "personal_assistant", "horoscope_agent", END]
     query: str
     selected_agent: str
     agent_output: Dict[str, Any]
@@ -258,6 +262,8 @@ class SupervisorAgent:
             max_retries=3
         )
         self.pa_agent = PersonalAssistantAgent()
+        self.horoscope_agent = HoroscopeAgent()
+        self.news_agent = NewsAgent()
         
         self.agents = {
             AgentType.DB_QUERY.value: AgentConfig(
@@ -268,11 +274,34 @@ class SupervisorAgent:
                 priority=1
             ),
             AgentType.WEATHER.value: AgentConfig(
-                name="weather_agent", 
-                description="Provides current weather information and forecasts for any location",
-                keywords=["weather", "temperature", "rain", "snow", "sunny", "cloudy", "forecast", 
-                         "hot", "cold", "humid", "°c", "°f", "degrees", "climate", "conditions"],
+                name="weather_agent",
+                description="Handles weather-related queries including current conditions and forecasts",
+                keywords=["weather", "temperature", "forecast", "rain", "snow", "sunny", "cloudy", 
+                         "humidity", "wind", "storm", "temperature", "degrees", "hot", "cold", "chance of rain"],
+                priority=1
+            ),
+            AgentType.HOROSCOPE.value: AgentConfig(
+                name="horoscope_agent",
+                description="Handles horoscope and zodiac sign related queries",
+                keywords=["horoscope", "zodiac", "astrology", "star sign", "birth sign", "aries", "taurus", 
+                         "gemini", "cancer", "leo", "virgo", "libra", "scorpio", "sagittarius", "capricorn", 
+                         "aquarius", "pisces", "daily horoscope", "weekly horoscope", "monthly horoscope",
+                         "advice for today", "daily advice", "guidance for today", "prediction",
+                         "fortune", "what the stars say", "cosmic guidance", "astral forecast",
+                         "lucky number", "lucky color", "compatibility", "love life", "career", "finance",
+                         "health", "wellness", "spiritual"
+                ],
                 priority=2
+            ),
+            AgentType.NEWS.value: AgentConfig(
+                name="news_agent",
+                description="Handles news-related queries including current events, business news, and market updates",
+                keywords=["news", "headlines", "current events", "latest news", "business news", "market news", 
+                         "financial news", "stock market", "economy", "politics", "world news", "breaking news",
+                         "update", "what's happening", "tell me about", "what's new", "recent developments",
+                         "retail news", "tax updates", "budget", "economic policy", "business trends"
+                ],
+                priority=1
             ),
             AgentType.PERSONAL_ASSISTANT.value: AgentConfig(
                 name="personal_assistant",
@@ -355,7 +384,54 @@ class SupervisorAgent:
         return False
     
     def _llm_route_query(self, query: str) -> Dict[str, Any]:
-        """Use LLM for routing decisions."""
+        """Use LLM for routing decisions with enhanced query detection."""
+        query_lower = query.lower()
+        
+        # Check for common horoscope-related questions
+        horoscope_indicators = [
+            "how will my day", "how's my day", "what does my day look like",
+            "how is my day", "how's today looking", "how will today be",
+            "what does today hold", "what's in store today",
+            "will it be a good day", "good day for me", "lucky day", "unlucky day",
+            "what should i avoid", "should i avoid", "be careful", "watch out for",
+            "advice for today", "daily advice", "guidance for today", "prediction",
+            "fortune", "what the stars say", "cosmic guidance", "astral forecast",
+            "horoscope", "zodiac", "astrology", "star sign", "birth sign",
+            # Patterns for queries about specific signs
+            "day today for ", "horoscope for ", "zodiac for ", "sign for ",
+            # All zodiac signs
+            "aries", "taurus", "gemini", "cancer", "leo", "virgo", 
+            "libra", "scorpio", "sagittarius", "capricorn", "aquarius", "pisces"
+        ]
+        
+        # Check for news-related queries
+        news_indicators = [
+            "news", "headlines", "current events", "latest news", "business news", 
+            "market news", "financial news", "stock market", "economy", "politics", 
+            "world news", "breaking news", "update", "what's happening", "tell me about", 
+            "what's new", "recent developments", "retail news", "tax updates", "budget", 
+            "economic policy", "business trends", "what's going on", "any updates on",
+            "latest on", "recent news about", "any news about"
+        ]
+        
+        # Check for horoscope queries first (higher priority)
+        if any(indicator in query_lower for indicator in horoscope_indicators):
+            return {
+                "agent": AgentType.HOROSCOPE.value,
+                "confidence": 0.95,
+                "reasoning": "Query contains common horoscope-related phrases",
+                "method": "keyword"
+            }
+            
+        # Then check for news queries
+        if any(indicator in query_lower for indicator in news_indicators):
+            return {
+                "agent": AgentType.NEWS.value,
+                "confidence": 0.9,
+                "reasoning": "Query contains news-related keywords",
+                "method": "keyword"
+            }
+            
         agent_descriptions = "\n".join([
             f"- {name}: {config.description}. Keywords: {', '.join(config.keywords) if config.keywords else 'N/A'}"
             for name, config in self.agents.items()
@@ -371,17 +447,24 @@ User query: "{query}"
 Instructions:
 1. Route weather-related queries (temperature, rain, humidity, weather conditions, etc.) to weather_agent
 2. Route data/database queries (sales, users, analytics, reports, etc.) to db_query_agent
-3. For all other general queries, conversations, greetings, or when unsure, use personal_assistant
-4. Weather queries don't need to mention specific locations - the weather agent handles location detection
-5. If the query is a greeting, general question, or doesn't fit other categories, use personal_assistant
-6. Be conservative - if you're not highly confident (>=0.8) about db_query_agent or weather_agent, default to personal_assistant
+3. Route ALL horoscope-related queries to horoscope_agent, including:
+   - Questions about daily horoscopes (e.g., "How is my day today?")
+   - Questions about specific zodiac signs (e.g., "What's the horoscope for Leo?")
+   - Questions about star signs, zodiac signs, or birth signs
+   - Questions asking for astrological predictions or advice
+   - Questions containing any of the 12 zodiac sign names (Aries, Taurus, etc.)
+   - Questions about what the stars say or cosmic guidance
+4. For all other general queries, conversations, greetings, or when unsure, use personal_assistant
+5. Weather queries don't need to mention specific locations - the weather agent handles location detection
+6. If the query is a greeting, general question, or doesn't fit other categories, use personal_assistant
+7. Be conservative - if you're not highly confident (>=0.8) about db_query_agent or weather_agent, default to personal_assistant
 
 Respond with JSON:
-{{
-    "agent": "agent_name",  // One of: db_query_agent, weather_agent, or personal_assistant
+{
+    "agent": "agent_name",  // One of: db_query_agent, weather_agent, horoscope_agent, or personal_assistant
     "confidence": 0.8,  // Confidence score between 0 and 1
     "reasoning": "Brief explanation of why this agent was chosen"
-}}"""
+}"""
 
         try:
             response = self.llm.invoke([HumanMessage(content=prompt)])
@@ -407,13 +490,249 @@ Respond with JSON:
         except Exception as e:
             logger.error(f"LLM routing failed: {str(e)}")
             return {
-                "agent": AgentType.DB_QUERY.value,
+                "agent": AgentType.PERSONAL_ASSISTANT.value,
                 "confidence": 0.1,
                 "reasoning": f"LLM routing failed: {str(e)}",
                 "method": "fallback"
             }
 
 # Enhanced node functions
+def news_agent_node(state: AgentState) -> Dict[str, Any]:
+    """News agent node to handle news-related queries."""
+    try:
+        # Initialize the agent
+        agent = NewsAgent()
+        logger.info("News agent initialized")
+        
+        # Initialize default response
+        response = "I'm sorry, I don't have any news to share at this time."
+        
+        # Extract query and parameters
+        query = state.get("query", "").lower()
+        
+        try:
+            # --- Country extraction logic ---
+            import re
+            import pycountry
+            def extract_country(query):
+                # First check for country names or common demonyms in the query
+                query_lower = query.lower()
+                
+                # Check for country names in PyCountry
+                for country in pycountry.countries:
+                    # Check common name
+                    if country.name.lower() in query_lower:
+                        return country.alpha_2.lower()
+                    # Check official name if exists
+                    if hasattr(country, 'official_name') and getattr(country, 'official_name', '').lower() in query_lower:
+                        return country.alpha_2.lower()
+                
+                # Common demonyms and alternative names
+                country_mapping = {
+                    # Americas
+                    'us': 'us', 'usa': 'us', 'united states': 'us', 'united states of america': 'us',
+                    'american': 'us', 'america': 'us',
+                    'canada': 'ca', 'canadian': 'ca',
+                    'mexico': 'mx', 'mexican': 'mx',
+                    'brazil': 'br', 'brazilian': 'br',
+                    'argentina': 'ar', 'argentinian': 'ar',
+                    
+                    # Europe
+                    'uk': 'gb', 'united kingdom': 'gb', 'britain': 'gb', 'great britain': 'gb',
+                    'british': 'gb', 'england': 'gb', 'scotland': 'gb', 'wales': 'gb',
+                    'france': 'fr', 'french': 'fr',
+                    'germany': 'de', 'german': 'de',
+                    'italy': 'it', 'italian': 'it',
+                    'spain': 'es', 'spanish': 'es',
+                    'netherlands': 'nl', 'dutch': 'nl', 'holland': 'nl',
+                    'belgium': 'be', 'belgian': 'be',
+                    'switzerland': 'ch', 'swiss': 'ch',
+                    'austria': 'at', 'austrian': 'at',
+                    'sweden': 'se', 'swedish': 'se',
+                    'norway': 'no', 'norwegian': 'no',
+                    'denmark': 'dk', 'danish': 'dk',
+                    'finland': 'fi', 'finnish': 'fi',
+                    'russia': 'ru', 'russian': 'ru',
+                    
+                    # Asia
+                    'india': 'in', 'indian': 'in',
+                    'china': 'cn', 'chinese': 'cn',
+                    'japan': 'jp', 'japanese': 'jp',
+                    'south korea': 'kr', 'korean': 'kr', 'south korean': 'kr',
+                    'north korea': 'kp', 'north korean': 'kp',
+                    'australia': 'au', 'australian': 'au',
+                    'new zealand': 'nz', 'kiwi': 'nz',
+                    'singapore': 'sg', 'singaporean': 'sg',
+                    'malaysia': 'my', 'malaysian': 'my',
+                    'thailand': 'th', 'thai': 'th',
+                    'vietnam': 'vn', 'vietnamese': 'vn',
+                    'indonesia': 'id', 'indonesian': 'id',
+                    'philippines': 'ph', 'filipino': 'ph',
+                    'pakistan': 'pk', 'pakistani': 'pk',
+                    'bangladesh': 'bd', 'bangladeshi': 'bd',
+                    'sri lanka': 'lk', 'sri lankan': 'lk',
+                    'nepal': 'np', 'nepalese': 'np',
+                    'bhutan': 'bt', 'bhutanese': 'bt',
+                    'maldives': 'mv', 'maldivian': 'mv',
+                    
+                    # Middle East
+                    'uae': 'ae', 'united arab emirates': 'ae', 'emirati': 'ae',
+                    'saudi arabia': 'sa', 'saudi': 'sa',
+                    'israel': 'il', 'israeli': 'il',
+                    'iran': 'ir', 'iranian': 'ir',
+                    'iraq': 'iq', 'iraqi': 'iq',
+                    'afghanistan': 'af', 'afghan': 'af',
+                    'turkey': 'tr', 'turkish': 'tr',
+                    'egypt': 'eg', 'egyptian': 'eg',
+                    
+                    # Africa
+                    'south africa': 'za', 'south african': 'za',
+                    'nigeria': 'ng', 'nigerian': 'ng',
+                    'kenya': 'ke', 'kenyan': 'ke',
+                    'ethiopia': 'et', 'ethiopian': 'et',
+                    'egypt': 'eg', 'egyptian': 'eg',
+                    'morocco': 'ma', 'moroccan': 'ma',
+                    'ghana': 'gh', 'ghanaian': 'gh',
+                    'tanzania': 'tz', 'tanzanian': 'tz',
+                    'uganda': 'ug', 'ugandan': 'ug'
+                }
+                
+                # Check the mapping dictionary
+                for term, code in country_mapping.items():
+                    if re.search(r'\b' + re.escape(term) + r'\b', query_lower):
+                        return code
+                        
+                # Default to the configured country from environment
+                return os.getenv('SOURCE_COUNTRY', 'in')
+            country_code = extract_country(query)
+            logger.info(f"Using country code: {country_code}")
+
+            # Default to top news if no specific query
+            # Check for topic-specific queries (e.g., pharma, technology, sports, etc.)
+            topic_keywords = {
+                'pharma': ['pharma', 'pharmaceutical', 'medicine', 'drug', 'healthcare', 'medical'],
+                'technology': ['tech', 'technology', 'ai', 'artificial intelligence', 'startup', 'innovation'],
+                'sports': ['sports', 'cricket', 'football', 'ipl', 'bcci', 'fifa'],
+                'business': ['business', 'market', 'economy', 'finance', 'stocks', 'sensex', 'nifty'],
+                'politics': ['politics', 'election', 'bjp', 'congress', 'modi', 'rahul gandhi']
+            }
+            
+            # Default to user's query if no specific topic is found
+            search_query = query
+            
+            # Check if the query contains any topic keywords
+            for topic, keywords in topic_keywords.items():
+                if any(keyword in query.lower() for keyword in keywords):
+                    if topic == 'pharma':
+                        search_query = 'pharmaceutical OR medicine OR drugs OR healthcare OR medical research'
+                    elif topic == 'technology':
+                        search_query = 'technology OR artificial intelligence OR startup OR innovation OR digital'
+                    elif topic == 'sports':
+                        search_query = 'sports OR cricket OR football OR ipl OR bcci'
+                    elif topic == 'business':
+                        search_query = 'business OR economy OR finance OR stocks OR market'
+                    elif topic == 'politics':
+                        search_query = 'politics OR election OR government OR parliament'
+                    logger.info(f"Detected {topic} news request. Using search query: {search_query}")
+                    break
+                    
+            if not query or any(term in query for term in ["latest", "top", "current", "recent"]):
+                logger.info("Fetching top news")
+                result = agent.get_top_news(source_country=country_code, limit=3, query=search_query if search_query != query else None)
+            else:
+                logger.info(f"Searching news for: {search_query}")
+                result = agent.search_news(search_query, source_country=country_code, limit=3)
+            
+            # Process the raw API response
+            if isinstance(result, dict):
+                if 'error' in result:
+                    error_msg = result.get('error', 'Unknown error occurred')
+                    logger.error(f"News API error: {error_msg}")
+                    response = f"I couldn't fetch the latest news. {error_msg}"
+                    logger.error(f"Returning ERROR: {response}")
+                    return {
+                        "messages": [AIMessage(content=response)],
+                        "agent_output": {"status": "error"},
+                        "finished": True
+                    }
+                else:
+                    articles = agent.process_news_response(result)
+                    logger.info(f"Processed articles: {json.dumps(articles, indent=2)}")
+                    if not articles:
+                        response = "I couldn't find any news articles matching your query."
+                        logger.warning(f"Returning NO_NEWS: {response} (articles length: {len(articles)})")
+                        return {
+                            "messages": [AIMessage(content=response)],
+                            "agent_output": {"status": "no_news"},
+                            "finished": True
+                        }
+                    else:
+                        response = "📰 *Latest News Updates* 📰\n\n"
+                        for i, article in enumerate(articles[:3], 1):  # Limit to 3 articles
+                            # Get and format title
+                            title = str(article.get('title', 'No title')).strip() or 'Untitled Article'
+                            title = ' '.join(title.split())  # Clean up extra whitespace and newlines
+                            response += f"{i}. *{title}*\n"
+                            
+                            # Get and format summary/description
+                            summary = article.get('summary') or article.get('text') or article.get('description')
+                            if summary:
+                                summary = ' '.join(str(summary).split())  # Clean up whitespace and newlines
+                                # Split into sentences and rejoin with proper spacing
+                                sentences = [s.strip() for s in summary.split('.') if s.strip()]
+                                summary = '. '.join(sentences) + ('.' if sentences else '')
+                                response += f"   {summary}\n"
+                            
+                            # Get and format source and date
+                            source = ''
+                            if 'source' in article and isinstance(article['source'], dict):
+                                source = article['source'].get('name', '')
+                            if not source:
+                                source = article.get('source_name', '')
+                            if source:
+                                response += f"   Source: {source}\n"
+
+                            pub_date = article.get('publish_date') or article.get('published_at') or article.get('date')
+                            if pub_date:
+                                response += f"   Published: {pub_date}\n"
+
+                            url = article.get('url')
+                            if url:
+                                response += f"   Read more: {url}\n"
+
+                            response += "\n"
+                        
+                        logger.info(f"Formatted news response with {len(articles)} articles")
+                        return {
+                            "messages": [AIMessage(content=response)],
+                            "agent_output": {
+                                "success": True,
+                                "status": "success",
+                                "response": response,
+                                "articles": articles[:3]
+                            },
+                            "finished": True
+                        }
+        
+        except Exception as e:
+            logger.error(f"Error processing news response: {str(e)}\n{traceback.format_exc()}")
+            response = f"I encountered an error while processing the news: {str(e)}"
+        
+        # Create the response dictionary
+        response_dict = {
+            "messages": [AIMessage(content=response)],
+            "agent_output": {"status": "success"} if response != "I'm sorry, I don't have any news to share at this time." else {"status": "no_news"},
+            "finished": True
+        }
+        return response_dict
+    except Exception as e:
+        logger.error(f"Error processing news response: {str(e)}\n{traceback.format_exc()}")
+        return {
+            "messages": [AIMessage(content=f"I encountered an error while fetching news: {str(e)}")],
+            "agent_output": {"status": "error"},
+            "finished": True
+        }
+
 def supervisor_node(state: AgentState) -> Dict[str, Any]:
     """Enhanced supervisor node."""
     supervisor = SupervisorAgent()
@@ -558,6 +877,144 @@ def enhanced_weather_agent_node(state: AgentState) -> Dict[str, Any]:
             "error": error_msg
         }
 
+def horoscope_agent_node(state: AgentState) -> Dict[str, Any]:
+    """Horoscope agent node to handle horoscope related queries with enhanced question handling."""
+    try:
+        # Initialize the agent
+        agent = HoroscopeAgent()
+        logger.info(f"Horoscope agent initialized. Default sign: {agent.default_sign}")
+        
+        # Extract sign and date from query if present
+        query = state["query"].lower()
+        sign = None
+        day = None
+        
+        # Look for zodiac signs in the query
+        for zodiac in agent.valid_signs:
+            if zodiac.lower() in query:
+                sign = zodiac
+                logger.info(f"Found zodiac sign in query: {sign}")
+                break
+        
+        # Look for date references
+        date_indicators = {
+            'today': 'TODAY',
+            'tomorrow': 'TOMORROW',
+            'yesterday': 'YESTERDAY',
+            'week': 'WEEK',
+            'month': 'MONTH'
+        }
+        
+        for indicator, value in date_indicators.items():
+            if indicator in query:
+                day = value
+                logger.info(f"Found date indicator: {day}")
+                break
+        
+        # Log the parameters being used
+        logger.info(f"Fetching horoscope with sign: {sign or 'default'}, day: {day or 'TODAY'}")
+        
+        # Get horoscope data
+        result = agent.get_horoscope(sign=sign, day=day or 'TODAY')
+        logger.info(f"Horoscope API response: {json.dumps(result, indent=2) if isinstance(result, dict) else result}")
+        
+        # Format the response based on the type of question
+        if not result.get('success'):
+            error_msg = result.get('error', 'No error details provided')
+            logger.error(f"Failed to fetch horoscope: {error_msg}")
+            return {
+                "messages": [AIMessage(content=f"I'm sorry, I couldn't fetch your horoscope. {error_msg}")],
+                "agent_output": result,
+                "final_answer": "I'm having trouble accessing horoscope information right now. Please try again later.",
+                "processed": False,
+                "next": END
+            }
+        
+        # Extract the horoscope text
+        horoscope_text = result.get('data', {}).get('horoscope_data', '')
+        sign_used = result.get('sign', 'your sign').capitalize()
+        date_used = result.get('data', {}).get('date', 'today')
+        
+        # Customize response based on question type
+        if 'how will my day' in query or 'how\'s my day' in query or 'what does my day look like' in query:
+            response = f"For {sign_used} on {date_used}, here's what the stars have in store for your day:\n\n{horoscope_text}"
+        elif 'good day for me' in query or 'will it be a good day' in query or 'lucky day' in query:
+            # Extract the general sentiment from the horoscope
+            positive_indicators = ['fortunate', 'lucky', 'good', 'great', 'positive', 'favorable', 'promising']
+            negative_indicators = ['challenging', 'difficult', 'tough', 'be careful', 'caution', 'avoid']
+            
+            if any(word in horoscope_text.lower() for word in positive_indicators):
+                sentiment = "The stars are looking favorable for you today!"
+            elif any(word in horoscope_text.lower() for word in negative_indicators):
+                sentiment = "The stars suggest some caution might be needed today."
+            else:
+                sentiment = "The stars show a mix of influences today."
+                
+            response = f"For {sign_used} on {date_used}:\n\n{sentiment} Here's what the stars say:\n\n{horoscope_text}"
+        elif 'what should i avoid' in query or 'should i avoid' in query or 'be careful' in query or 'watch out for' in query:
+            # Try to extract cautionary advice
+            response = f"For {sign_used} on {date_used}, here are some things to be mindful of according to your horoscope:\n\n"
+            
+            # Look for cautionary phrases in the horoscope text
+            warnings = []
+            sentences = [s.strip() for s in horoscope_text.split('.') if s.strip()]
+            
+            caution_words = ['avoid', 'be careful', 'caution', 'watch out', 'beware', 'steer clear', 'refrain']
+            for sentence in sentences:
+                if any(word in sentence.lower() for word in caution_words):
+                    warnings.append(sentence)
+            
+            if warnings:
+                response += "\n".join(warnings)
+            else:
+                response += "The stars don't highlight any specific warnings, but here's your daily horoscope:\n\n" + horoscope_text
+        else:
+            # Default response
+            response = f"Here's the horoscope for {sign_used} on {date_used}:\n\n{horoscope_text}"
+        
+        # Create the response dictionary
+        response_dict = {
+            "messages": [AIMessage(content=response)],
+            "agent_output": result,
+            "final_answer": response,
+            "processed": True,
+            "next": END,
+            "routing_confidence": 0.95  # High confidence for direct horoscope responses
+        }
+        
+        # Create a log-safe version of the response for debugging
+        log_safe_response = {
+            "messages": [{"content": msg.content, "type": type(msg).__name__} for msg in response_dict["messages"]],
+            "agent_output": response_dict["agent_output"],
+            "final_answer": response_dict["final_answer"],
+            "processed": response_dict["processed"],
+            "next": str(response_dict["next"]),
+            "routing_confidence": response_dict["routing_confidence"]
+        }
+        logger.info(f"Horoscope response prepared: {json.dumps(log_safe_response, indent=2)[:500]}...")  # Log first 500 chars
+        return response_dict
+        
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"Error in horoscope_agent_node: {error_msg}\n{traceback.format_exc()}")
+        
+        # Create a safe error response
+        error_response = {
+            "success": False,
+            "error": error_msg,
+            "type": "horoscope_error"
+        }
+        
+        return {
+            "messages": [AIMessage(content="I encountered an error while processing your horoscope request.")],
+            "agent_output": error_response,
+            "final_answer": "I'm sorry, I couldn't process your horoscope request at the moment. Please try again later.",
+            "processed": False,
+            "next": END,
+            "error": error_msg,
+            "routing_confidence": 0.9
+        }
+
 def personal_assistant_node(state: AgentState) -> Dict[str, Any]:
     """Personal assistant node for general queries and conversations."""
     try:
@@ -626,6 +1083,43 @@ def enhanced_final_response_node(state: AgentState) -> Dict[str, str]:
             if agent_output.get("type") == "goodbye" or agent_output.get("should_exit", False):
                 response["should_exit"] = True
             return response
+        elif selected_agent == AgentType.HOROSCOPE.value:
+            # Check if we have a direct response in agent_output
+            if 'response' in agent_output:
+                return {"final_answer": agent_output['response']}
+            # If not, check if we have a final_answer from the horoscope_agent_node
+            elif state.get('final_answer'):
+                return {"final_answer": state['final_answer']}
+            else:
+                return {"final_answer": "I couldn't find your horoscope. Please try again."}
+        elif selected_agent == AgentType.NEWS.value:
+            logger.info(f"Processing NEWS agent output: {json.dumps(agent_output, default=str, indent=2)}")
+            
+            # First check if we have a direct response in agent_output
+            if agent_output.get("success", False) and "response" in agent_output:
+                logger.info("Found direct response in agent_output")
+                return {"final_answer": agent_output["response"]}
+                
+            # Fall back to checking messages if no direct response
+            messages = agent_output.get("messages", [])
+            logger.info(f"Found {len(messages)} messages in agent_output")
+            
+            if messages:
+                msg = messages[0]
+                logger.info(f"Message type: {type(msg).__name__}, content: {str(msg)[:200]}...")
+                
+                if hasattr(msg, "content"):
+                    logger.info("Extracting content using msg.content")
+                    return {"final_answer": msg.content}
+                elif isinstance(msg, dict) and "content" in msg:
+                    logger.info("Extracting content using msg['content']")
+                    return {"final_answer": msg["content"]}
+                else:
+                    logger.warning(f"Unexpected message format: {type(msg)}")
+                    return {"final_answer": str(msg)}
+                    
+            # If we get here, no news was found
+            return {"final_answer": "I'm sorry, I don't have any news to share at this time."}
         else:
             # Default to database response for any other agent
             return format_database_response(query, agent_output.get("data"))
@@ -733,6 +1227,8 @@ def create_enhanced_workflow() -> StateGraph:
     workflow.add_node("supervisor", supervisor_node)
     workflow.add_node("db_query_agent", db_query_agent_node)
     workflow.add_node("weather_agent", enhanced_weather_agent_node)
+    workflow.add_node("horoscope_agent", horoscope_agent_node)
+    workflow.add_node("news_agent", news_agent_node)
     workflow.add_node("personal_assistant", personal_assistant_node)
     workflow.add_node("final_response", enhanced_final_response_node)
     
@@ -743,19 +1239,21 @@ def create_enhanced_workflow() -> StateGraph:
         {
             "db_query_agent": "db_query_agent",
             "weather_agent": "weather_agent",
+            "horoscope_agent": "horoscope_agent",
+            "news_agent": "news_agent",
             "personal_assistant": "personal_assistant",
-            END: END,
-        },
+            END: "final_response"
+        }
     )
     
-    workflow.add_edge("db_query_agent", "final_response")
-    workflow.add_edge("weather_agent", "final_response")
-    workflow.add_edge("personal_assistant", "final_response")
-    workflow.add_edge("final_response", END)
+    # Add edges from agent nodes to final response
+    for node in ["db_query_agent", "weather_agent", "horoscope_agent", "news_agent", "personal_assistant"]:
+        workflow.add_edge(node, "final_response")
     
     # Set entry point
     workflow.set_entry_point("supervisor")
     
+    # Compile the workflow
     return workflow.compile()
 
 # Main processing function
@@ -799,33 +1297,110 @@ def process_enhanced_query(query: str) -> str:
         logger.error(f"Error processing query: {str(e)}\n{traceback.format_exc()}")
         return f"⚠️ An error occurred while processing your request: {str(e)}"
 
+def test_horoscope_agent():
+    """Test the horoscope agent with various queries."""
+    print("\n" + "="*60)
+    print("  Testing Horoscope Agent")
+    print("="*60)
+    
+    # Initialize the horoscope agent
+    agent = HoroscopeAgent()
+    
+    # Test cases
+    test_cases = [
+        # Basic horoscope queries
+        {"query": "What's my horoscope for today?", "sign": None, "day": "TODAY"},
+        {"query": "How will my day be today?", "sign": None, "day": "TODAY"},
+        {"query": "What should I avoid today?", "sign": None, "day": "TODAY"},
+        {"query": "Will it be a good day for me?", "sign": None, "day": "TODAY"},
+        
+        # Specific sign queries
+        {"query": "What's the horoscope for Cancer?", "sign": "Cancer", "day": "TODAY"},
+        {"query": "How will a Gemini's day be tomorrow?", "sign": "Gemini", "day": "TOMORROW"},
+        
+        # Date-specific queries
+        {"query": "What was my horoscope yesterday?", "sign": None, "day": "YESTERDAY"},
+        {"query": "What's the weekly horoscope for Leo?", "sign": "Leo", "day": "WEEK"},
+    ]
+    
+    for case in test_cases:
+        print(f"\n{'='*80}")
+        print(f"TEST CASE: {case['query']}")
+        print(f"Sign: {case['sign'] or 'Default'}, Day: {case['day']}")
+        print("-" * 80)
+        
+        # Create a test state
+        state = {
+            "query": case["query"],
+            "messages": [],
+            "next": None,
+            "selected_agent": "horoscope_agent",
+            "agent_output": {},
+            "final_answer": "",
+            "processed": False,
+            "context": {},
+            "error": None,
+            "routing_confidence": 1.0,
+            "weather_analysis": None
+        }
+        
+        try:
+            # Call the horoscope agent node directly
+            result = horoscope_agent_node(state)
+            
+            # Print the result
+            if result.get("processed", False):
+                print("SUCCESS:")
+                print(result.get("final_answer", "No response generated"))
+            else:
+                print("ERROR:")
+                print(result.get("error", result.get("agent_output", {}).get("error", "Unknown error occurred")))
+                
+        except Exception as e:
+            print(f"EXCEPTION: {str(e)}")
+            import traceback
+            traceback.print_exc()
+    
+    print("\n" + "="*60)
+    print("  End of Horoscope Agent Tests")
+    print("="*60 + "\n")
+
 if __name__ == "__main__":
     import sys
     
-    # Test queries for all agents
-    test_queries = [
-        # Weather agent tests
-        "Will it rain today?",
-        "What's the humidity in London?", 
-        "Temperature in Paris",
-        "How's the weather?",
-        "Is it windy outside?",
+    # Check for test mode
+    if "--test-horoscope" in sys.argv:
+        test_horoscope_agent()
+    elif "--test" in sys.argv:
+        # Original test queries
+        test_queries = [
+            # Weather agent tests
+            "Will it rain today?",
+            "What's the humidity in London?", 
+            "Temperature in Paris",
+            "How's the weather?",
+            "Is it windy outside?",
+            
+            # Database agent tests
+            "What are my sales for April?",
+            "Show me the top 5 products by sales",
+            
+            # Horoscope agent tests
+            "What's my horoscope for today?",
+            "How will my day be today?",
+            "What should I avoid today?",
+            "What's the horoscope for Cancer?",
+            
+            # Personal assistant tests
+            "Hello!",
+            "What can you do?",
+            "Tell me a joke",
+            "How are you today?",
+            "Thank you for your help!",
+            "Who created you?",
+            "What's your name?"
+        ]
         
-        # Database agent tests
-        "What are my sales for April?",
-        "Show me the top 5 products by sales",
-        
-        # Personal assistant tests
-        "Hello!",
-        "What can you do?",
-        "Tell me a joke",
-        "How are you today?",
-        "Thank you for your help!",
-        "Who created you?",
-        "What's your name?"
-    ]
-    
-    if len(sys.argv) > 1 and sys.argv[1] == "--test":
         for query in test_queries:
             print(f"\n{'='*80}")
             print(f"QUERY: {query}")
@@ -837,7 +1412,7 @@ if __name__ == "__main__":
         print("\n" + "="*60)
         print("  Welcome to Xenie - Your Personal Assistant")
         print("  Type 'quit', 'exit', 'bye', or press Ctrl+C to exit")
-        print("  Try asking about weather, sales data, or just say hello!")
+        print("  Try asking about weather, horoscopes, sales data, or just say hello!")
         print("="*60 + "\n")
         
         while True:
