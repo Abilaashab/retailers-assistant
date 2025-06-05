@@ -432,6 +432,38 @@ class SupervisorAgent:
                 "method": "keyword"
             }
             
+        # Check for database queries
+        db_query_indicators = [
+            "income", "revenue", "sales", "profit", "expense", "transaction", 
+            "how much did i earn", "what's my earnings", "show me my", 
+            "total for", "sum of", "average", "count of", "report on",
+            "data for", "metrics for", "statistics for", "analysis of",
+            "financial", "monthly income", "quarterly report", "yearly earnings",
+            "my sales", "my performance", "my numbers"
+        ]
+        if any(indicator in query_lower for indicator in db_query_indicators):
+            return {
+                "agent": AgentType.DB_QUERY.value,
+                "confidence": 0.95,
+                "reasoning": "Query contains database-related keywords",
+                "method": "keyword"
+            }
+            
+        # Check for weather queries
+        weather_indicators = [
+            "weather", "temperature", "forecast", "rain", "snow", "sunny", "cloudy", 
+            "humidity", "wind", "storm", "degrees", "hot", "cold", "chance of rain",
+            "how's the weather", "what's the weather", "will it rain", "is it going to rain",
+            "do i need an umbrella"
+        ]
+        if any(indicator in query_lower for indicator in weather_indicators):
+            return {
+                "agent": AgentType.WEATHER.value,
+                "confidence": 0.95,
+                "reasoning": "Query contains weather-related keywords",
+                "method": "keyword"
+            }
+            
         agent_descriptions = "\n".join([
             f"- {name}: {config.description}. Keywords: {', '.join(config.keywords) if config.keywords else 'N/A'}"
             for name, config in self.agents.items()
@@ -471,12 +503,20 @@ Respond with JSON:
             content = response.content.strip()
             
             # Extract JSON
-            if content.startswith('```json'):
-                content = content.split('```json')[1].split('```')[0].strip()
-            elif content.startswith('```'):
-                content = content.split('```')[1].split('```')[0].strip()
-            
-            result = json.loads(content)
+            try:
+                if '```json' in content:
+                    content = content.split('```json')[1].split('```')[0].strip()
+                elif '```' in content:
+                    content = content.split('```')[1].split('```')[0].strip()
+                
+                # Ensure we have valid JSON
+                if not content.strip():
+                    raise ValueError("Empty content after JSON extraction")
+                    
+                result = json.loads(content)
+            except (json.JSONDecodeError, IndexError, ValueError) as e:
+                logger.error(f"Failed to parse LLM response: {content}")
+                raise ValueError(f"Invalid JSON response from LLM: {str(e)}")
             
             if result["agent"] not in self.agents:
                 result["agent"] = AgentType.DB_QUERY.value
@@ -1193,12 +1233,39 @@ def format_database_response(query: str, data: Any) -> Dict[str, str]:
     try:
         llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", temperature=0)
         
+        # Helper function to serialize data with proper date handling
+        def serialize_data(data):
+            if data is None:
+                return "No data available"
+                
+            if isinstance(data, (list, tuple)):
+                return [serialize_data(item) for item in data]
+                
+            if isinstance(data, dict):
+                return {k: serialize_data(v) for k, v in data.items()}
+                
+            # Handle date and datetime objects
+            if hasattr(data, 'isoformat'):
+                return data.isoformat()
+                
+            # Handle Decimal and other numeric types
+            if isinstance(data, (int, float, decimal.Decimal)):
+                # Format as INR if it looks like a currency amount
+                if abs(data) >= 1 and ('.' not in str(data) or str(data).endswith('.0')):
+                    return f"₹{data:,.0f}"
+                return f"₹{float(data):,.2f}" if data else "₹0.00"
+                
+            return str(data)
+        
+        # Serialize the data before JSON dumps
+        serialized_data = serialize_data(data)
+        
         prompt = f"""Generate a concise, natural language answer for the user query based on the data provided.
 
 User Query: {query}
 
 Data:
-{json.dumps(data, indent=2, ensure_ascii=False, cls=DecimalEncoder)}
+{json.dumps(serialized_data, indent=2, ensure_ascii=False, default=str)}
 
 Instructions:
 - If data is empty or None, politely indicate no results were found
@@ -1208,6 +1275,8 @@ Instructions:
 - Use appropriate emojis and formatting
 - Keep the response concise but informative
 - Example: Instead of $100, show as ₹100
+- For date ranges, show the range in a readable format (e.g., "April 1-30, 2025")
+- For daily data, summarize the key trends and highlight any significant values
 
 Response:"""
         
@@ -1216,7 +1285,11 @@ Response:"""
         
     except Exception as e:
         logger.error(f"Error formatting database response: {str(e)}")
-        return {"final_answer": f"📊 I found some data but couldn't format it properly: {str(e)}"}
+        logger.error(f"Data that caused the error: {str(data)[:500]}...")  # Log first 500 chars of data
+        return {
+            "final_answer": "📊 I found some data but encountered an issue formatting it. " \
+                          "Please try rephrasing your query or ask for specific details."
+        }
 
 # Create enhanced workflow
 def create_enhanced_workflow() -> StateGraph:
