@@ -17,6 +17,7 @@ from news_agent import NewsAgent, NewsArticle
 import decimal
 import traceback
 from datetime import datetime
+from web_search import WebSearchAgent
 
 # Configure logging
 logging.basicConfig(
@@ -42,6 +43,7 @@ class AgentType(Enum):
     PERSONAL_ASSISTANT = "personal_assistant"
     HOROSCOPE = "horoscope_agent"
     NEWS = "news_agent"
+    WEB_SEARCH = "web_search_agent"  # New agent type
 
 # Enhanced weather query analysis dataclass
 @dataclass
@@ -78,8 +80,18 @@ class AgentState(TypedDict):
 # Load environment variables
 load_dotenv()
 
-class EnhancedWeatherAgent:
-    """Enhanced weather agent with LLM-powered location extraction and parameter selection."""
+# At the top level of the file, create a singleton supervisor
+_supervisor_instance = None
+
+def get_supervisor():
+    """Get or create the supervisor instance."""
+    global _supervisor_instance
+    if _supervisor_instance is None:
+        _supervisor_instance = SupervisorAgent()
+    return _supervisor_instance
+
+class SupervisorAgent:
+    """Enhanced supervisor agent with better routing logic."""
     
     def __init__(self):
         self.llm = ChatGoogleGenerativeAI(
@@ -87,184 +99,7 @@ class EnhancedWeatherAgent:
             temperature=0,
             max_retries=3
         )
-        self.weather_agent = WeatherAgent()
-    
-    def analyze_weather_query(self, query: str) -> WeatherQueryAnalysis:
-        """Use LLM to intelligently analyze weather queries."""
-        
-        prompt = f"""Analyze this weather query and extract the following information:
-
-Query: "{query}"
-
-Please respond with a JSON object containing:
-{{
-    "location": "specific location mentioned (city, country, etc.) or null if none",
-    "use_geolocation": true/false (true if no specific location mentioned),
-    "requested_parameters": ["list of specific weather parameters requested"],
-    "query_type": "general|specific|forecast",
-    "time_context": "current|today|tomorrow|week|specific_time",
-    "confidence": 0.0-1.0
-}}
-
-Available weather parameters:
-- temperature (temp, hot, cold, degrees)
-- humidity (humid, moisture)
-- wind (wind_speed, wind_direction, breeze)
-- pressure (atmospheric_pressure, barometric)
-- conditions (rain, sunny, cloudy, snow, fog, weather_description)
-- precipitation (rain, snow, drizzle)
-- visibility
-- feels_like (apparent temperature)
-
-Guidelines:
-- If no specific location is mentioned, set use_geolocation to true
-- For "Will it rain?" type questions, focus on precipitation and conditions
-- For "What's the weather?" give general overview
-- For "How humid is it?" focus on humidity
-- Extract locations carefully - don't treat weather conditions as locations
-- Be conservative with confidence scores
-
-Examples:
-- "Will it rain today?" → location: null, use_geolocation: true, requested_parameters: ["precipitation", "conditions"]
-- "Temperature in Paris" → location: "Paris", use_geolocation: false, requested_parameters: ["temperature"]
-- "Weather in London tomorrow" → location: "London", time_context: "tomorrow"
-"""
-
-        try:
-            response = self.llm.invoke([HumanMessage(content=prompt)])
-            content = response.content.strip()
-            
-            # Extract JSON from response
-            try:
-                if content.startswith('```json'):
-                    content = content.split('```json')[1].split('```')[0].strip()
-                elif content.startswith('```'):
-                    content = content.split('```')[1].split('```')[0].strip()
-                
-                result = json.loads(content)
-                
-                return WeatherQueryAnalysis(
-                    location=result.get("location"),
-                    use_geolocation=result.get("use_geolocation", False),
-                    requested_parameters=result.get("requested_parameters", []),
-                    query_type=result.get("query_type", "general"),
-                    time_context=result.get("time_context", "current"),
-                    confidence=result.get("confidence", 0.5)
-                )
-                
-            except json.JSONDecodeError as e:
-                logger.error(f"Failed to parse LLM response as JSON: {content}")
-                # Fallback analysis
-                return self._fallback_analysis(query)
-                
-        except Exception as e:
-            logger.error(f"Error in LLM weather query analysis: {str(e)}")
-            return self._fallback_analysis(query)
-    
-    def _fallback_analysis(self, query: str) -> WeatherQueryAnalysis:
-        """Fallback analysis when LLM fails."""
-        query_lower = query.lower()
-        
-        # Simple keyword detection for fallback
-        has_location = any(word in query_lower for word in ['in', 'at', 'for'])
-        weather_keywords = ['rain', 'temperature', 'humid', 'wind', 'weather', 'sunny', 'cloud']
-        
-        return WeatherQueryAnalysis(
-            location=None,
-            use_geolocation=True,
-            requested_parameters=["conditions"] if any(kw in query_lower for kw in weather_keywords) else [],
-            query_type="general",
-            time_context="current",
-            confidence=0.3
-        )
-    
-    def get_enhanced_weather(self, analysis: WeatherQueryAnalysis) -> Dict[str, Any]:
-        """Get weather data based on analysis."""
-        try:
-            # Determine location
-            if analysis.use_geolocation or not analysis.location:
-                location = self.get_system_location()
-                if not location:
-                    return {
-                        "success": False,
-                        "error": "Could not determine your location. Please specify a city.",
-                        "type": "location_error"
-                    }
-            else:
-                location = analysis.location
-            
-            logger.info(f"Getting weather for location: {location}")
-            
-            # Get weather data
-            result = self.weather_agent.get_weather(location)
-            
-            if not result.get('success'):
-                return {
-                    "success": False,
-                    "error": f"Could not get weather data: {result.get('error', 'Unknown error')}",
-                    "type": "weather_api_error"
-                }
-            
-            # Add analysis context to result
-            result['analysis'] = analysis
-            result['resolved_location'] = location
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Error in enhanced weather retrieval: {str(e)}")
-            return {
-                "success": False,
-                "error": str(e),
-                "type": "system_error"
-            }
-    
-    def get_system_location(self) -> str:
-        """Get system location using IP geolocation."""
-        logger.info("Attempting to detect system location...")
-        
-        geolocation_services = [
-            {
-                'url': 'http://ip-api.com/json/',
-                'parser': lambda data: f"{data.get('city', '')}, {data.get('country', '')}" if data.get('status') == 'success' and data.get('city') else None
-            },
-            {
-                'url': 'https://ipapi.co/json/',
-                'parser': lambda data: f"{data.get('city', '')}, {data.get('country_name', '')}" if data.get('city') else None
-            }
-        ]
-        
-        for service in geolocation_services:
-            try:
-                response = requests.get(service['url'], timeout=10)
-                if response.status_code == 200:
-                    data = response.json()
-                    location = service['parser'](data)
-                    if location and location.strip() != ', ':
-                        logger.info(f"✅ Successfully detected location: {location}")
-                        return location.strip()
-            except Exception as e:
-                logger.warning(f"Geolocation service failed: {str(e)}")
-                continue
-        
-        # Fallback to environment variable or default
-        default_location = os.getenv('DEFAULT_LOCATION', 'Bengaluru, India')
-        logger.info(f"Using fallback location: {default_location}")
-        return default_location
-
-class SupervisorAgent:
-    """Enhanced supervisor agent with better routing logic."""
-    
-    def __init__(self):
-        self.llm = ChatGoogleGenerativeAI(
-            model="gemini-1.5-pro", 
-            temperature=0,
-            max_retries=3
-        )
-        self.pa_agent = PersonalAssistantAgent()
-        self.horoscope_agent = HoroscopeAgent()
-        self.news_agent = NewsAgent()
-        
+        # Remove agent initializations, keep only the routing configuration
         self.agents = {
             AgentType.DB_QUERY.value: AgentConfig(
                 name="db_query_agent",
@@ -314,6 +149,12 @@ class SupervisorAgent:
                 description="Handles general queries and conversations",
                 keywords=[],
                 priority=0  # Default fallback
+            ),
+            AgentType.WEB_SEARCH.value: AgentConfig(
+                name="web_search_agent",
+                description="Handles web search queries using Google Custom Search API",
+                keywords=["search", "google", "web", "find", "lookup", "internet", "online", "query", "information", "details", "data", "research", "explore", "discover", "learn", "know", "understand", "what is", "who is", "where is", "how to", "why does", "when did", "what are", "who are", "where are", "how do", "why do", "when was", "what does", "who does", "where does", "how can", "why can", "when can", "what should", "who should", "where should", "how should", "why should", "when should"],
+                priority=1
             )
         }
     
@@ -438,7 +279,7 @@ class SupervisorAgent:
             "weather", "temperature", "forecast", "rain", "snow", "sunny", "cloudy", 
             "humidity", "wind", "storm", "degrees", "hot", "cold", "chance of rain",
             "how's the weather", "what's the weather", "will it rain", 
-            "is it going to rain", "do i need an umbrella"
+            "is it going to rain", "do i need an umbrella", "degree","celcius"
         ]
         
         # Check each type of query in order of priority
@@ -491,10 +332,6 @@ class SupervisorAgent:
                 "name": config.name,
                 "type": agent_type,
                 "description": config.description,
-                "capabilities": [
-                    "Can handle queries related to: " + ", ".join(config.keywords) if config.keywords else "General conversation and queries"
-                ],
-                "examples": self._get_agent_examples(agent_type)
             }
             agent_descriptions.append(agent_desc)
 
@@ -505,24 +342,21 @@ Available Agents:
 
 User Query: "{query}"
 
-Instructions:
-1. Analyze the query's intent and content carefully
-2. Consider each agent's capabilities and example queries
-3. For general conversation, greetings, or uncertain queries, use personal_assistant
-4. Provide a confidence score (0.0-1.0) based on how well the query matches the chosen agent
-5. Explain your reasoning for the selection
+Notes:
+1. For general product information that does not vary from store to store use web search
 
 Response Format (JSON):
 {{
     "agent": "agent_name",  // The selected agent's type value
     "confidence": 0.0-1.0,  // Confidence score
-    "reasoning": "Detailed explanation of why this agent was chosen",
+    "reasoning": "Explanation of why this agent was chosen",
     "method": "llm"
 }}
 
 Please analyze the query and provide your routing decision:"""
 
         try:
+            #logger.info(f"LLM Routing Full Prompt:\n{prompt}")
             response = self.llm.invoke([HumanMessage(content=prompt)])
             content = response.content.strip()
             
@@ -546,6 +380,7 @@ Please analyze the query and provide your routing decision:"""
                 result["method"] = "llm"
                 
                 return result
+                logger.info(f"Routed by LLM:{result}")
                 
             except (json.JSONDecodeError, KeyError) as e:
                 logger.error(f"Failed to parse LLM response: {content}")
@@ -610,7 +445,7 @@ Please analyze the query and provide your routing decision:"""
 def news_agent_node(state: AgentState) -> Dict[str, Any]:
     """News agent node to handle news-related queries."""
     try:
-        # Initialize the agent
+        # Initialize the agent in the node
         agent = NewsAgent()
         logger.info("News agent initialized")
         
@@ -824,7 +659,8 @@ def news_agent_node(state: AgentState) -> Dict[str, Any]:
 
 def supervisor_node(state: AgentState) -> Dict[str, Any]:
     """Enhanced supervisor node."""
-    supervisor = SupervisorAgent()
+    # Use the singleton supervisor
+    supervisor = get_supervisor()
     
     query = state.get("query")
     if not query and state["messages"]:
@@ -921,15 +757,22 @@ def enhanced_weather_agent_node(state: AgentState) -> Dict[str, Any]:
         query = state.get("query", "")
         logger.info(f"Enhanced Weather Agent processing: {query}")
         
-        # Use enhanced weather agent
-        enhanced_agent = EnhancedWeatherAgent()
+        # Initialize the weather agent in the node
+        agent = WeatherAgent()
+        logger.info("Weather agent initialized")
         
-        # Analyze the query using LLM
-        analysis = enhanced_agent.analyze_weather_query(query)
-        logger.info(f"Weather query analysis: location={analysis.location}, use_geolocation={analysis.use_geolocation}, parameters={analysis.requested_parameters}")
+        # Preprocess the query to handle common weather questions
+        processed_query = preprocess_weather_query(query)
+        logger.info(f"Processed weather query: {processed_query}")
         
-        # Get weather data based on analysis
-        result = enhanced_agent.get_enhanced_weather(analysis)
+        # If no location specified, get system location
+        if not processed_query:
+            location = get_system_location()
+            logger.info(f"Using system location: {location}")
+            processed_query = location
+        
+        # Get weather data
+        result = agent.get_weather(processed_query)
         
         if not result.get('success'):
             error_msg = result.get('error', 'Unknown error')
@@ -940,22 +783,19 @@ def enhanced_weather_agent_node(state: AgentState) -> Dict[str, Any]:
                     "error": error_msg,
                     "type": result.get("type", "weather_error")
                 },
-                "error": error_msg,
-                "weather_analysis": analysis
+                "error": error_msg
             }
         
         return {
             "agent_output": {
                 "success": True,
-                "data": result['data'],
-                "location": result.get('resolved_location'),
-                "analysis": analysis
-            },
-            "weather_analysis": analysis
+                "data": result.get('data', {}),
+                "location": result.get('location')
+            }
         }
         
     except Exception as e:
-        error_msg = f"Error in enhanced weather agent: {str(e)}"
+        error_msg = f"Error in weather agent: {str(e)}"
         logger.error(f"{error_msg}\n{traceback.format_exc()}")
         return {
             "agent_output": {
@@ -966,12 +806,86 @@ def enhanced_weather_agent_node(state: AgentState) -> Dict[str, Any]:
             "error": error_msg
         }
 
+def get_system_location() -> str:
+    """Get system location using IP geolocation."""
+    logger.info("Attempting to detect system location...")
+    
+    geolocation_services = [
+        {
+            'url': 'http://ip-api.com/json/',
+            'parser': lambda data: f"{data.get('city', '')}, {data.get('country', '')}" if data.get('status') == 'success' and data.get('city') else None
+        },
+        {
+            'url': 'https://ipapi.co/json/',
+            'parser': lambda data: f"{data.get('city', '')}, {data.get('country_name', '')}" if data.get('city') else None
+        }
+    ]
+    
+    for service in geolocation_services:
+        try:
+            response = requests.get(service['url'], timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                location = service['parser'](data)
+                if location and location.strip() != ', ':
+                    logger.info(f"✅ Successfully detected location: {location}")
+                    return location.strip()
+        except Exception as e:
+            logger.warning(f"Geolocation service failed: {str(e)}")
+            continue
+    
+    # Fallback to environment variable or default
+    default_location = os.getenv('DEFAULT_LOCATION', 'Bengaluru, India')
+    logger.info(f"Using fallback location: {default_location}")
+    return default_location
+
+def preprocess_weather_query(query: str) -> str:
+    """Preprocess weather queries to handle common patterns."""
+    query_lower = query.lower().strip()
+    
+    # Common weather question patterns
+    rain_patterns = [
+        "will it rain",
+        "is it going to rain",
+        "is it raining",
+        "are we getting rain",
+        "chance of rain",
+        "possibility of rain"
+    ]
+    
+    # If it's a rain question without location, return empty string to use default location
+    if any(pattern in query_lower for pattern in rain_patterns) and "in" not in query_lower:
+        return ""
+    
+    # Handle "weather in [location]" pattern
+    if "weather in" in query_lower:
+        return query_lower.split("weather in")[1].strip()
+    
+    # Handle "temperature in [location]" pattern
+    if "temperature in" in query_lower:
+        return query_lower.split("temperature in")[1].strip()
+    
+    # If query contains "in [location]", extract location
+    if " in " in query_lower:
+        location = query_lower.split(" in ")[1].strip()
+        # Verify this isn't part of another word
+        if location and not any(word.startswith("in") for word in query_lower.split()):
+            return location
+    
+    # For general weather queries without location, return empty string to use default
+    weather_keywords = ["weather", "temperature", "rain", "snow", "sunny", "cloudy", "humid"]
+    if any(keyword in query_lower for keyword in weather_keywords):
+        return ""
+        
+    # If no patterns match, return the original query
+    return query
+
 def horoscope_agent_node(state: AgentState) -> Dict[str, Any]:
     """Horoscope agent node to handle horoscope related queries with enhanced question handling."""
     try:
-        # Initialize the agent
+        # Initialize the horoscope agent in the node
         agent = HoroscopeAgent()
-        logger.info(f"Horoscope agent initialized. Default sign: {agent.default_sign}")
+        logger.info("Horoscope agent initialized")
         
         # Extract sign and date from query if present
         query = state["query"].lower()
@@ -1107,14 +1021,15 @@ def horoscope_agent_node(state: AgentState) -> Dict[str, Any]:
 def personal_assistant_node(state: AgentState) -> Dict[str, Any]:
     """Personal assistant node for general queries and conversations."""
     try:
+        # Initialize the PA agent in the node
+        agent = PersonalAssistantAgent()
+        logger.info("Personal assistant initialized")
+        
         query = state.get("query", "")
         logger.info(f"Personal Assistant processing: {query}")
         
-        # Initialize the personal assistant
-        supervisor = SupervisorAgent()
-        
         # Process the query with the personal assistant
-        result = supervisor.pa_agent.process_query(query)
+        result = agent.process_query(query)
         
         return {
             "agent_output": {
@@ -1155,7 +1070,7 @@ def enhanced_final_response_node(state: AgentState) -> Dict[str, str]:
                 return {"final_answer": f"🌤️ I couldn't get the weather information. {error_msg}"}
             elif error_type == "database_error":
                 # For database errors, use the message we've already made user-friendly
-                return {"final_answer": f"📊 {error_msg}"}
+                return {"final_answer": f"📊 Sorry couldn't fetch the data now. Please try again"}
             else:
                 # For any other errors, provide a generic but friendly message
                 return {"final_answer": "⚠️ I encountered an issue processing your request. Please try again in a moment."}
@@ -1209,6 +1124,21 @@ def enhanced_final_response_node(state: AgentState) -> Dict[str, str]:
                     
             # If we get here, no news was found
             return {"final_answer": "I'm sorry, I don't have any news to share at this time."}
+        elif selected_agent == AgentType.WEB_SEARCH.value:
+            logger.info(f"Processing WEB_SEARCH agent output: {json.dumps(agent_output, default=str, indent=2)}")
+            
+            # First check if we have a direct response in agent_output
+            if agent_output.get("success", False) and "response" in agent_output:
+                logger.info("Found direct response in agent_output")
+                return {"final_answer": agent_output["response"]}
+            
+            # If we have a final_answer in the state, use that
+            if state.get("final_answer"):
+                logger.info("Using final_answer from state")
+                return {"final_answer": state["final_answer"]}
+            
+            # If we get here, no web search results were found
+            return {"final_answer": "I'm sorry, I couldn't find any relevant information."}
         else:
             # Default to database response for any other agent
             return format_database_response(query, agent_output.get("data"))
@@ -1340,6 +1270,87 @@ Response:"""
                           "Please try rephrasing your query or ask for specific details."
         }
 
+def web_search_agent_node(state: AgentState) -> Dict[str, Any]:
+    """Web search agent node to handle web search queries."""
+    try:
+        # Initialize the web search agent
+        agent = WebSearchAgent()
+        logger.info("Web search agent initialized")
+        
+        query = state.get("query", "")
+        logger.info(f"Web Search Agent processing: {query}")
+        
+        # Process the search query
+        try:
+            # Use handle_query instead of search
+            search_response = agent.handle_query(query)
+            #logger.info(f"this is the search response {search_response}")
+            # Check if the response indicates an error
+            if (search_response is None or 
+                search_response.strip() == " " or 
+                "I couldn't find any relevant information" in search_response or
+                "I encountered an error" in search_response):
+                error_msg = search_response if search_response else "No results found"
+                logger.error(f"Web search failed: {error_msg}")
+                return {
+                    "messages": [AIMessage(content=error_msg)],
+                    "agent_output": {
+                        "success": False,
+                        "error": error_msg,
+                        "type": "search_error"
+                    },
+                    "final_answer": error_msg,
+                    "processed": False,
+                    "next": END
+                }
+            
+            # Log the successful response
+            logger.info(f"Web search successful, response length: {len(search_response)}")
+            
+            # The search_response is already formatted by Gemini, so use it directly
+            return {
+                "messages": [AIMessage(content=search_response)],
+                "agent_output": {
+                    "success": True,
+                    "response": search_response,
+                    "results": search_response
+                },
+                "final_answer": search_response,
+                "processed": True,
+                "next": END,
+                "routing_confidence": 0.95
+            }
+            
+        except Exception as e:
+            error_msg = f"Error during web search: {str(e)}"
+            logger.error(f"{error_msg}\n{traceback.format_exc()}")
+            return {
+                "messages": [AIMessage(content="I encountered an error while searching.")],
+                "agent_output": {
+                    "success": False,
+                    "error": error_msg,
+                    "type": "search_error"
+                },
+                "final_answer": "I'm sorry, I encountered an error while searching for that information.",
+                "processed": False,
+                "next": END
+            }
+            
+    except Exception as e:
+        error_msg = f"Error in web search agent: {str(e)}"
+        logger.error(f"{error_msg}\n{traceback.format_exc()}")
+        return {
+            "messages": [AIMessage(content="I encountered a system error.")],
+            "agent_output": {
+                "success": False,
+                "error": error_msg,
+                "type": "system_error"
+            },
+            "final_answer": "I'm sorry, I encountered a system error while trying to search.",
+            "processed": False,
+            "next": END
+        }
+
 # Create enhanced workflow
 def create_enhanced_workflow() -> StateGraph:
     """Create and configure the enhanced workflow graph."""
@@ -1352,6 +1363,7 @@ def create_enhanced_workflow() -> StateGraph:
     workflow.add_node("horoscope_agent", horoscope_agent_node)
     workflow.add_node("news_agent", news_agent_node)
     workflow.add_node("personal_assistant", personal_assistant_node)
+    workflow.add_node("web_search_agent", web_search_agent_node)
     workflow.add_node("final_response", enhanced_final_response_node)
     
     # Define conditional edges
@@ -1364,12 +1376,13 @@ def create_enhanced_workflow() -> StateGraph:
             "horoscope_agent": "horoscope_agent",
             "news_agent": "news_agent",
             "personal_assistant": "personal_assistant",
+            "web_search_agent": "web_search_agent",
             END: "final_response"
         }
     )
     
     # Add edges from agent nodes to final response
-    for node in ["db_query_agent", "weather_agent", "horoscope_agent", "news_agent", "personal_assistant"]:
+    for node in ["db_query_agent", "weather_agent", "horoscope_agent", "news_agent", "personal_assistant", "web_search_agent"]:
         workflow.add_edge(node, "final_response")
     
     # Set entry point
@@ -1382,6 +1395,9 @@ def create_enhanced_workflow() -> StateGraph:
 def process_enhanced_query(query: str) -> str:
     """Process a natural language query through the enhanced agent system."""
     logger.info(f"Processing enhanced query: {query}")
+    
+    # Initialize supervisor at the start
+    get_supervisor()
     
     # Create workflow
     runnable = create_enhanced_workflow()
