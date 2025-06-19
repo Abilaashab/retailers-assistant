@@ -10,8 +10,6 @@ interface Message {
   originalContent?: string;
   translatedContent?: string;
   isError?: boolean;
-  isStreaming?: boolean;
-  timestamp: number;
 }
 
 const LANGUAGES = [
@@ -28,18 +26,6 @@ const LANGUAGES = [
 ];
 
 export default function VoiceInterface() {
-  // Helper: Update the last assistant message in the conversation
-  const updateLastAssistantMessage = (updateFn: (msg: Message) => void) => {
-    setConversation(prev => {
-      const updated = [...prev];
-      const idx = updated.findLastIndex((m: Message) => m.role === 'assistant');
-      if (idx !== -1) {
-        updateFn(updated[idx]);
-      }
-      return updated;
-    });
-  };
-
   const [selectedLanguage, setSelectedLanguage] = useState('en-IN');
   const [selectedVoice, setSelectedVoice] = useState(getDefaultVoiceForLanguage('en-IN'));
   const [isListening, setIsListening] = useState(false);
@@ -72,24 +58,16 @@ export default function VoiceInterface() {
     console.log(`Available voices for ${baseLang}:`, voices);
     return voices;
   }, [selectedLanguage, getAvailableVoices]);
-  const [conversation, setConversation] = useState<Message[]>([{
-    role: 'assistant',
-    content: 'Hello! How can I help you today?',
-    timestamp: Date.now()
-  }]);
+  const [conversation, setConversation] = useState<Message[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   
-  // Refs for tracking state and timeouts
-  const isProcessingRef = useRef(false);
-  const submitTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const mediaRecorder = useRef<MediaRecorder | null>(null);
   const audioChunks = useRef<Blob[]>([]);
   const audioContextRef = useRef<AudioContext | null>(null);
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
   const lastAssistantMessage = conversation.slice().reverse().find(msg => msg.role === 'assistant');
-  const processedTranscript = useRef<string | null>(null);
   
   const {
     transcript,
@@ -106,15 +84,6 @@ export default function VoiceInterface() {
   useEffect(() => {
     transcriptRef.current = transcript;
   }, [transcript]);
-  
-  // Cleanup timeouts on unmount
-  useEffect(() => {
-    return () => {
-      if (submitTimeoutRef.current) {
-        clearTimeout(submitTimeoutRef.current);
-      }
-    };
-  }, []);
 
   const handleTextSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -122,64 +91,42 @@ export default function VoiceInterface() {
     const input = form.elements.namedItem('textInput') as HTMLInputElement;
     const text = input.value.trim();
     
-    if (!text || isProcessingRef.current) {
-      console.log('[DEBUG] Skipping submission - empty or already processing');
-      return;
+    if (text) {
+      handleSubmit(text);
+      input.value = '';
     }
-
-    // Clear any pending submissions
-    if (submitTimeoutRef.current) {
-      clearTimeout(submitTimeoutRef.current);
-    }
-
-    // Debounce the submission
-    submitTimeoutRef.current = setTimeout(() => {
-      if (!isProcessingRef.current) {
-        console.log('[DEBUG] Processing submission after debounce');
-        handleSubmit(text);
-        input.value = '';
-      }
-    }, 100); // 100ms debounce
   };
   
-  const startVoiceRecognition = async () => {
-    console.log('[DEBUG] startVoiceRecognition called, current isListening:', isListening);
+  const toggleListening = async () => {
     if (isListening) {
-      console.log('[DEBUG] Stopping voice recognition...');
+      console.log('Stopping voice recognition...');
       SpeechRecognition.stopListening();
       setIsListening(false);
+      console.log('Voice recognition stopped');
       
-      // Only submit if there's actual text in the transcript and we haven't processed it yet
-      const currentTranscript = transcriptRef.current.trim();
-      if (currentTranscript && currentTranscript !== processedTranscript.current) {
-        console.log('[DEBUG] Submitting transcript from voice recognition:', currentTranscript);
-        processedTranscript.current = currentTranscript;
-        await handleSubmit(currentTranscript);
+      // Only submit if there's actual text in the transcript
+      if (transcriptRef.current.trim()) {
+        console.log('Submitting transcript:', transcriptRef.current);
+        await handleSubmit(transcriptRef.current);
         resetTranscript();
       }
     } else {
-      console.log('[DEBUG] Starting voice recognition...');
+      console.log('Starting voice recognition with language:', selectedLanguage);
       try {
-        // Clear the processed transcript when starting new recognition
-        processedTranscript.current = null;
         resetTranscript();
         await SpeechRecognition.startListening({
           language: selectedLanguage,
-          continuous: false,
+          continuous: false, // Changed to false to auto-stop after speech ends
         });
         setIsListening(true);
+        console.log('Voice recognition started');
       } catch (error) {
         console.error('Error starting voice recognition:', error);
-        setConversation(prev => {
-          const updated = [...prev];
-          updated.push({
-            role: 'assistant', 
-            content: 'Error starting voice recognition. Please check your microphone permissions.', 
-            isError: true,
-            timestamp: Date.now()
-          });
-          return updated;
-        });
+        setConversation(prev => [...prev, { 
+          role: 'assistant', 
+          content: 'Error starting voice recognition. Please check your microphone permissions.', 
+          isError: true 
+        }]);
       }
     }
   };
@@ -195,46 +142,17 @@ export default function VoiceInterface() {
   }, [isRecording, isListening]);
   
   const handleSubmit = async (text: string, audioData?: string) => {
-    // Skip if we're already processing or if this is a duplicate message
-    if ((!text && !audioData) || isProcessingRef.current) {
-      console.log('[DEBUG] Skipping duplicate or empty submission');
-      return;
-    }
-    
-    // Create a unique ID for this submission to track duplicates
-    const submissionId = `sub-${Date.now()}`;
-    console.log(`[DEBUG] Starting submission ${submissionId}`);
-    
+    if ((!text && !audioData) || isProcessing) return;
+
     try {
+      setIsProcessing(true);
       
-      // Add user's message to conversation - only if it doesn't already exist
-      const userMessageContent = text || '🎤 [Voice message]';
-      const isDuplicate = conversation.some(
-        msg => msg.role === 'user' && 
-        (msg.content === userMessageContent || msg.content === '🎤 [Voice message]')
-      );
-      
-      if (!isDuplicate) {
-        setConversation(prev => [...prev, { 
-          role: 'user', 
-          content: userMessageContent,
-          originalContent: text || undefined,
-          timestamp: Date.now()
-        }]);
+      // Add user's message to conversation
+      if (text) {
+        setConversation(prev => [...prev, { role: 'user', content: text }]);
+      } else if (audioData) {
+        setConversation(prev => [...prev, { role: 'user', content: '🎤 [Voice message]' }]);
       }
-
-      // Create a placeholder for the assistant's response
-      const assistantMessage: Message = {
-        role: 'assistant',
-        content: '',
-        isStreaming: true,
-        timestamp: Date.now()
-      };
-      
-      setConversation(prev => [...prev, assistantMessage]);
-
-
-
 
       const requestBody = {
         text,
@@ -243,11 +161,13 @@ export default function VoiceInterface() {
         isAudio: !!audioData,
         audioData,
         audioFormat: 'audio/webm',
-        skipTranslation: selectedLanguage.startsWith('en'),
-        stream: true // Enable streaming
+        skipTranslation: selectedLanguage.startsWith('en')
       };
 
-      console.log('Sending request to chat API with streaming enabled');
+      console.log('Sending request to chat API:', JSON.stringify({
+        ...requestBody,
+        audioData: audioData ? '[audio data]' : undefined
+      }, null, 2));
 
       const response = await fetch('/api/chat', {
         method: 'POST',
@@ -263,137 +183,42 @@ export default function VoiceInterface() {
         throw new Error(`Failed to get response from server: ${response.status} ${response.statusText}`);
       }
 
-      if (!response.body) {
-        throw new Error('No response body received');
-      }
-
-      // Process the streaming response
-      const reader = response.body.getReader();
-      // Use the browser's TextDecoder
-      const decoder = new TextDecoder();
-      let buffer = '';
-      let finalResponse = '';
-      let isSpeakingStarted = false;
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) {
-          console.log('Stream complete');
-          break;
-        }
-
-        // Decode the chunk and process it
-        const chunk = decoder.decode(value, { stream: true });
-        buffer += chunk;
-        
-        // Process each line in the buffer
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-        
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          
-          const data = line.substring(6); // Remove 'data: ' prefix
-          if (data === '[DONE]') break;
-          
-          try {
-            const parsed = JSON.parse(data);
-            console.log('Received chunk:', parsed);
-            
-            // Update the conversation based on the chunk type
-            setConversation(prev => {
-              const updated = [...prev];
-              const idx = updated.findLastIndex(m => m.role === 'assistant');
-              const currentMessage = idx !== -1 ? updated[idx] : undefined;
-              
-              if (!currentMessage) return prev;
-              
-              switch (parsed.type) {
-                case 'translation':
-                  // Update the last user message with translated content
-                  const userMessageIndex = updated.findLastIndex(m => m.role === 'user');
-                  if (userMessageIndex !== -1) {
-                    updated[userMessageIndex].translatedContent = parsed.content;
-                  }
-                  break;
-                  
-                case 'agent':
-                  // Only set initial content if empty
-                  if (!currentMessage.content) {
-                    currentMessage.content = parsed.content || '';
-                    currentMessage.timestamp = Date.now();
-                  }
-                  break;
-                  
-                case 'final':
-                  // This is the final translated response
-                  if (parsed.done) {
-                    currentMessage.isStreaming = false;
-                    currentMessage.content = parsed.content || finalResponse;
-                  } else {
-                    currentMessage.content = (currentMessage.content || '') + (parsed.content || '');
-                    finalResponse = currentMessage.content;
-                  }
-                  currentMessage.timestamp = Date.now();
-                  break;
-                  
-                case 'error':
-                  currentMessage.content = `Error: ${parsed.content}`;
-                  currentMessage.isError = true;
-                  currentMessage.isStreaming = false;
-                  currentMessage.timestamp = Date.now();
-                  break;
-                  
-                case 'complete':
-                  currentMessage.isStreaming = false;
-                  currentMessage.timestamp = Date.now();
-                  break;
-              }
-              
-              return updated;
-            });
-            
-            // Start speaking when we have the complete response
-            if (parsed.type === 'final' && parsed.done && finalResponse && !isSpeakingStarted) {
-              isSpeakingStarted = true;
-              speakText(finalResponse, selectedLanguage);
-            }
-            
-          } catch (error) {
-            console.error('Error parsing chunk:', error, 'Chunk:', data);
-          }
-        }
-      }
+      const data = await response.json();
+      console.log('Chat API response:', data);
       
-      // Make sure to mark streaming as complete when done
-      setConversation(prev => {
-        const updated = [...prev];
-        const idx = updated.findLastIndex(m => m.role === 'assistant');
-        const message = idx !== -1 ? updated[idx] : undefined;
-        if (message) {
-          message.isStreaming = false;
-        }
-        return updated;
-      });
+      // Update user message with translated content if available
+      if (data.translated_text) {
+        setConversation(prev => {
+          const updated = [...prev];
+          const lastUserMessage = updated[updated.length - 1];
+          if (lastUserMessage.role === 'user') {
+            lastUserMessage.translatedContent = data.translated_text;
+          }
+          return updated;
+        });
+      }
+
+      // Add assistant's response
+      const assistantMessage: Message = {
+        role: 'assistant',
+        content: data.agent_response || data.error || 'No response from assistant',
+      };
+      
+      setConversation(prev => [...prev, assistantMessage]);
+      
+      // Speak the assistant's response
+      if (assistantMessage.content) {
+        speakText(assistantMessage.content, selectedLanguage);
+      }
     } catch (error) {
       console.error('Error:', error);
-      // Instead of pushing a new assistant message, update the last one with error content
-      updateLastAssistantMessage(msg => {
-        msg.content = 'Sorry, I encountered an error processing your request. Please try again.';
-        msg.isError = true;
-        msg.isStreaming = false;
-        msg.timestamp = Date.now();
-      });
+      setConversation(prev => [...prev, {
+        role: 'assistant',
+        content: 'Sorry, I encountered an error processing your request. Please try again.',
+        isError: true
+      }]);
     } finally {
-      console.log('[DEBUG] Clearing processing state');
-      isProcessingRef.current = false;
       setIsProcessing(false);
-      
-      // Clean up the timeout
-      if (submitTimeoutRef.current) {
-        clearTimeout(submitTimeoutRef.current);
-        submitTimeoutRef.current = null;
-      }
     }
   };
   
@@ -434,47 +259,32 @@ export default function VoiceInterface() {
           
           reader.onerror = (error) => {
             console.error('Error reading audio data:', error);
-            setConversation(prev => {
-              const updated = [...prev];
-              updated.push({
-                role: 'assistant',
-                content: 'Error processing the audio. Please try again.',
-                isError: true,
-                timestamp: Date.now()
-              });
-              return updated;
-            });
+            setConversation(prev => [...prev, { 
+              role: 'assistant', 
+              content: 'Error processing the audio. Please try again.', 
+              isError: true 
+            }]);
           };
           
           console.log('Starting to read audio blob as data URL...');
           reader.readAsDataURL(audioBlob);
         } catch (error) {
           console.error('Error in onstop handler:', error);
-          setConversation(prev => {
-            const updated = [...prev];
-            updated.push({
-              role: 'assistant',
-              content: 'Error processing the audio. Please try again.',
-              isError: true,
-              timestamp: Date.now()
-            });
-            return updated;
-          });
+          setConversation(prev => [...prev, { 
+            role: 'assistant', 
+            content: 'Error processing the audio. Please try again.', 
+            isError: true 
+          }]);
         }
       };
       
       mediaRecorder.current.onerror = (event) => {
         console.error('MediaRecorder error:', event);
-        setConversation(prev => {
-          const updated = [...prev];
-          updated.push({
-            role: 'assistant',
-            content: 'Error recording audio. Please try again.',
-            isError: true,
-            timestamp: Date.now()
-          });
-          return updated;
-        });
+        setConversation(prev => [...prev, { 
+          role: 'assistant', 
+          content: 'Error recording audio. Please try again.', 
+          isError: true 
+        }]);
       };
       
       console.log('Starting MediaRecorder...');
@@ -485,16 +295,7 @@ export default function VoiceInterface() {
     } catch (error) {
       console.error('Error in startAudioRecording:', error);
       const errorMessage = 'Could not access microphone. Please ensure you have granted microphone permissions.';
-      setConversation(prev => {
-        const updated = [...prev];
-        updated.push({
-          role: 'assistant',
-          content: errorMessage,
-          isError: true,
-          timestamp: Date.now()
-        });
-        return updated;
-      });
+      setConversation(prev => [...prev, { role: 'assistant', content: errorMessage, isError: true }]);
     }
   };
   
@@ -686,42 +487,34 @@ export default function VoiceInterface() {
                       {message.role === 'user' ? 'You' : 'Xenie'}
                     </div>
                     
-                    {/* For user messages, show content with optional translation */}
+                    {/* For user messages, show original text first, then translated text */}
                     {message.role === 'user' && (
-                      <div className="whitespace-pre-wrap">
-                        {message.content}
-                        {message.translatedContent && 
-                         message.translatedContent !== message.content &&
-                         !message.content.startsWith('🎤') && (
+                      <>
+                        <div className="whitespace-pre-wrap mb-2">
+                          {message.originalContent || message.content}
+                        </div>
+                        
+                        {message.translatedContent && message.translatedContent !== (message.originalContent || message.content) && (
                           <div className="text-sm italic border-t border-white/20 pt-2 mt-2">
                             <span className="opacity-70">(Translated) </span>
                             {message.translatedContent}
                           </div>
                         )}
-                      </div>
+                      </>
                     )}
                     
-                    {/* For assistant messages, show content with loading indicator */}
+                    {/* For assistant messages, just show the content */}
                     {message.role === 'assistant' && (
-                      <div className="whitespace-pre-wrap">
-                        {message.isStreaming ? (
-                          <div className="flex items-center space-x-1">
-                            <div className="w-2 h-2 rounded-full bg-gray-400 animate-bounce" style={{ animationDelay: '0ms' }}></div>
-                            <div className="w-2 h-2 rounded-full bg-gray-400 animate-bounce" style={{ animationDelay: '150ms' }}></div>
-                            <div className="w-2 h-2 rounded-full bg-gray-400 animate-bounce" style={{ animationDelay: '300ms' }}></div>
-                          </div>
-                        ) : (
-                          <div 
-                            dangerouslySetInnerHTML={{
-                              __html: message.content
-                                .replace(/📰/g, '<span class="text-xl">📰</span>')
-                                .replace(/\*([^*]+)\*/g, '<span class="font-bold">$1</span>')
-                                .replace(/\[(.*?)\]\((.*?)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="text-blue-400 hover:text-blue-300 underline">$1</a>')
-                                .replace(/\n/g, '<br/>')
-                            }}
-                          />
-                        )}
-                      </div>
+                      <div 
+                        className="whitespace-pre-wrap"
+                        dangerouslySetInnerHTML={{
+                          __html: message.content
+                            .replace(/📰/g, '<span class="text-xl">📰</span>')
+                            .replace(/\*([^*]+)\*/g, '<span class="font-bold">$1</span>')
+                            .replace(/\[(.*?)\]\((.*?)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="text-blue-400 hover:text-blue-300 underline">$1</a>')
+                            .replace(/\n/g, '<br/>')
+                        }}
+                      />
                     )}
                   </div>
                 </div>
@@ -764,7 +557,7 @@ export default function VoiceInterface() {
           <div className="mt-4 flex justify-center">
             <button
               type="button"
-              onClick={startVoiceRecognition}
+              onClick={toggleListening}
               disabled={!isMicrophoneAvailable || isProcessing || isRecording}
               className={`flex items-center justify-center w-12 h-12 rounded-full ${
                 isListening ? 'bg-red-500' : 'bg-indigo-600'

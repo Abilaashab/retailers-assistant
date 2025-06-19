@@ -1,24 +1,8 @@
 import { NextResponse } from 'next/server';
 import { SARVAM_CONFIG, toBcp47Code } from '@/config';
 
-declare class TransformStreamDefaultWriter<W = any> {
-  readonly desiredSize: number | null;
-  readonly ready: Promise<undefined>;
-  abort(reason?: any): Promise<void>;
-  close(): Promise<void>;
-  releaseLock(): void;
-  write(chunk: W): Promise<void>;
-}
-
 // Get API key from environment variables
 const apiKey = process.env.SARVAM_AI_API || process.env.NEXT_PUBLIC_SARVAM_AI_API;
-
-type StreamResponse = {
-  type: 'translation' | 'agent' | 'final' | 'error';
-  content: string;
-  done?: boolean;
-  error?: string;
-};
 
 type ChatRequest = {
   text?: string;
@@ -282,172 +266,13 @@ async function processAudio(audioData: string, audioFormat: string, sourceLang: 
   };
 }
 
-// Helper function to stream data
-function streamData(stream: WritableStreamDefaultWriter<Uint8Array>, data: any) {
-  const encoder = new TextEncoder();
-  return stream.write(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
-}
-
-// Helper function to process text with streaming
-async function* processTextStream(text: string, sourceLang: string, targetLang: string) {
-  const sourceLangCode = toBcp47Code(sourceLang);
-  const targetLangCode = toBcp47Code(targetLang);
-
-  // If source and target languages are the same, yield immediately
-  if (sourceLangCode === targetLangCode) {
-    yield {
-      type: 'translation',
-      content: text,
-      done: true
-    };
-    return;
-  }
-
-  // Make streaming request to the translation API
-  const response = await fetch('https://api.sarvam.ai/translate', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      [SARVAM_CONFIG.API_KEY_HEADER]: apiKey || ''
-    },
-    body: JSON.stringify({
-      text: text,
-      source_language: sourceLangCode,
-      target_language: targetLangCode,
-      stream: true
-    })
-  });
-
-  // Stream the response
-  const reader = response.body?.getReader();
-  if (!reader) throw new Error('No response body');
-
-  let buffer = '';
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) {
-      if (buffer) {
-        yield { type: 'translation', content: buffer, done: false };
-      }
-      yield { type: 'translation', content: '', done: true };
-      break;
-    }
-    
-    const chunk = new TextDecoder().decode(value);
-    buffer += chunk;
-    
-    // Try to parse complete JSON objects from the buffer
-    let startIdx = 0;
-    let endIdx;
-    
-    while ((endIdx = buffer.indexOf('\n', startIdx)) !== -1) {
-      const line = buffer.substring(startIdx, endIdx).trim();
-      startIdx = endIdx + 1;
-      
-      if (line.startsWith('data: ')) {
-        const data = line.substring(6); // Remove 'data: ' prefix
-        if (data === '[DONE]') continue;
-        
-        try {
-          const parsed = JSON.parse(data);
-          if (parsed.translated_text) {
-            yield { type: 'translation', content: parsed.translated_text, done: false };
-          }
-        } catch (e) {
-          console.error('Error parsing SSE data:', e);
-        }
-      }
-    }
-    
-    buffer = buffer.substring(startIdx);
-  }
-}
-
-// Call the supervisor agent with streaming support
-async function* callSupervisorAgentStream(query: string) {
-  // Skip translation for English text
-  const isEnglish = (text: string) => {
-    // Simple check for English text (this could be enhanced)
-    return /^[a-zA-Z0-9\s.,!?']+$/.test(text);
-  };
-
-  try {
-    // Call the endpoint with streaming
-    const response = await fetch('http://localhost:8000/process_query', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ 
-        query,
-        skip_translation: isEnglish(query) // Skip translation for English text
-      })
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to get response from server: ${response.status} ${response.statusText}`);
-    }
-
-    if (!response.body) {
-      throw new Error('No response body from supervisor');
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        if (buffer) {
-          try {
-            const parsed = JSON.parse(buffer);
-            if (parsed.response) {
-              yield { type: 'agent', content: parsed.response, done: true };
-            }
-          } catch (e) {
-            console.error('Error parsing final chunk:', e);
-          }
-        }
-        break;
-      }
-      
-      const chunk = decoder.decode(value, { stream: true });
-      buffer += chunk;
-      
-      // Process complete JSON objects
-      let startIdx = 0;
-      let endIdx;
-      
-      while ((endIdx = buffer.indexOf('\n', startIdx)) !== -1) {
-        const line = buffer.substring(startIdx, endIdx).trim();
-        startIdx = endIdx + 1;
-        
-        if (line) {
-          try {
-            const parsed = JSON.parse(line);
-            if (parsed.response) {
-              yield { type: 'agent', content: parsed.response, done: false };
-            }
-          } catch (e) {
-            console.error('Error parsing agent response:', line, e);
-          }
-        }
-      }
-      
-      buffer = buffer.substring(startIdx);
-    }
-  } catch (error) {
-    console.error('Error in callSupervisorAgentStream:', error);
-    yield { type: 'error', content: 'Failed to get response from server', done: true };
-  }
-}
-
 export async function POST(request: Request) {
   try {
     // Parse the request body
     const requestData: ChatRequest = await request.json();
     const { text, sourceLang, targetLang = 'en', isAudio = false, audioData, audioFormat, skipTranslation = false } = requestData;
+
+
 
     if (!apiKey) {
       console.error('Sarvam AI API key is not set');
@@ -471,129 +296,103 @@ export async function POST(request: Request) {
       );
     }
 
-    // Create a transform stream for streaming response
-    const stream = new TransformStream();
-    const writer = stream.writable.getWriter();
-    const encoder = new TextEncoder();
+    try {
+      let result: ChatResponse;
+      
+      if (isAudio && audioData) {
 
-    // Start processing in the background
-    (async () => {
-      try {
-        let translatedText = '';
-        let agentResponse = '';
-        let finalResponse = '';
+        result = await processAudio(audioData, audioFormat || 'audio/wav', sourceLang || 'en', 'en');
+      } else if (text) {
 
-        // 1. Handle audio/text input and translation
-        if (isAudio && audioData) {
-          const audioResult = await processAudio(audioData, audioFormat || 'audio/wav', sourceLang || 'en', 'en');
-          translatedText = audioResult.translated_text;
-          await streamData(writer, {
-            type: 'translation',
-            content: translatedText,
-            done: true
-          });
-        } else if (text) {
-          const effectiveSourceLang = sourceLang || 'en';
-          
-          // Skip translation if source language is English or explicitly requested
-          if (skipTranslation || effectiveSourceLang.startsWith('en')) {
-            translatedText = text;
-            await streamData(writer, {
-              type: 'translation',
-              content: translatedText,
-              done: true
-            });
-          } else {
-            // Stream the translation
-            for await (const chunk of processTextStream(text, effectiveSourceLang, 'en')) {
-              if (chunk.content) {
-                translatedText += chunk.content;
-                await streamData(writer, chunk);
-              }
-              if (chunk.done) break;
-            }
-          }
-        }
+        
+        const effectiveSourceLang = sourceLang || 'en';
+        // Skip translation if source language is English or explicitly requested
+        if (skipTranslation || effectiveSourceLang.startsWith('en')) {
 
-        // 2. Stream agent processing
-        for await (const chunk of callSupervisorAgentStream(translatedText)) {
-          if (chunk.content) {
-            agentResponse += chunk.content;
-            await streamData(writer, {
-              type: 'agent',
-              content: chunk.content,
-              done: chunk.done
-            });
-          }
-          if (chunk.done) break;
-        }
-
-        // 3. If needed, translate the response back
-        if (targetLang && targetLang !== 'en' && agentResponse) {
-          let translatedAgentResponse = '';
-          for await (const chunk of processTextStream(agentResponse, 'en', targetLang)) {
-            if (chunk.content) {
-              translatedAgentResponse += chunk.content;
-              await streamData(writer, {
-                type: 'final',
-                content: chunk.content,
-                done: false
-              });
-            }
-            if (chunk.done) {
-              finalResponse = translatedAgentResponse;
-              break;
-            }
-          }
-          // Send final done signal
-          await streamData(writer, {
-            type: 'final',
-            content: '',
-            done: true
-          });
+          result = {
+            transcript: text,
+            translated_text: text, // Use original text as translated text
+            source_lang: 'en-IN',
+            target_lang: 'en-IN',
+            is_simulated: false,
+            request_id: 'skipped-translation',
+            language_code: 'en-IN'
+          };
         } else {
-          // If no translation needed, just send the agent response as final
-          finalResponse = agentResponse;
-          if (finalResponse) {
-            await streamData(writer, {
-              type: 'final',
-              content: finalResponse,
-              done: true
-            });
-          } else {
-            // If no final response was set, close the stream
-            await writer.close();
+          result = await processText(text, effectiveSourceLang, 'en');
+        }
+      } else {
+        throw new Error('No text or audio data provided');
+      }
+      
+
+      
+      // Call supervisor agent with the translated text
+      let agentResponse;
+      try {
+        agentResponse = await callSupervisorAgent(result.translated_text);
+
+        
+        if (agentResponse.error) {
+          throw new Error(agentResponse.error);
+        }
+        
+        // If the target language is not English, try to translate the agent's response back
+        let finalResponse = agentResponse.response;
+        if (targetLang && targetLang !== 'en') {
+          try {
+
+            const translatedResponse = await processText(agentResponse.response, 'en', targetLang);
+            if (translatedResponse && translatedResponse.translated_text) {
+              finalResponse = translatedResponse.translated_text;
+
+            }
+          } catch (translationError) {
+            console.error('Error translating response:', translationError);
+            // Continue with English response if translation fails
+            finalResponse = agentResponse.response;
           }
         }
-
-        // Final response
-        await streamData(writer, {
-          type: 'complete',
-          content: '',
-          done: true
+        
+        result = {
+          ...result,
+          original_text: text,
+          agent_response: finalResponse,
+          target_lang: targetLang
+        };
+        
+        return NextResponse.json(result);
+        
+      } catch (agentError) {
+        console.error('Error calling supervisor agent:', agentError);
+        // Return the original translation result with an error message
+        return NextResponse.json({
+          ...result,
+          error: agentError instanceof Error ? agentError.message : 'Error processing request',
+          agent_response: agentError instanceof Error ? agentError.message : 'Error processing request'
         });
-
-      } catch (error) {
-        console.error('Error in streaming pipeline:', error);
-        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-        await streamData(writer, {
-          type: 'error',
-          content: errorMessage,
-          done: true
-        });
-      } finally {
-        await writer.close();
       }
-    })();
-
-    return new Response(stream.readable, {
-      headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
-      },
-    });
-
+      
+    } catch (apiError) {
+      console.error('Error processing request:', apiError);
+      
+      // Fallback to simulated response if API call fails
+      // Fallback to simulated response
+      const errorMessage = apiError instanceof Error ? apiError.message : 'Unknown error';
+      const simulatedResponse: ChatResponse = {
+        transcript: isAudio ? '[Audio processing failed]' : text || '',
+        translated_text: isAudio 
+          ? `[Simulated Audio Translation to ${targetLang}]: Audio processing failed - ${errorMessage}`
+          : `[Simulated Translation from ${sourceLang} to ${targetLang}]: ${text || ''}`,
+        source_lang: sourceLang || 'en',
+        target_lang: targetLang,
+        is_simulated: true,
+        error: errorMessage
+      };
+      
+      return NextResponse.json(simulatedResponse);
+    }
+    
   } catch (error) {
     console.error('Error processing request:', error);
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';

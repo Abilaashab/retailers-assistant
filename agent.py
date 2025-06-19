@@ -1195,9 +1195,20 @@ Examples:
 
 Generate a natural response:"""
         
-        response = llm.invoke([HumanMessage(content=prompt)])
-        return {"final_answer": response.content.strip()}
+        # Create a proper input format for the LLM
+        messages = [
+            {"role": "user", "content": prompt}
+        ]
         
+        try:
+            response = llm.invoke([HumanMessage(content=json.dumps({"input": messages}, ensure_ascii=False))])
+            return {"final_answer": response.content.strip()}
+        except Exception as e:
+            logger.error(f"Error in LLM call: {str(e)}")
+            # Fallback to direct prompt if the structured call fails
+            response = llm.invoke([HumanMessage(content=prompt)])
+            return {"final_answer": response.content.strip()}
+            
     except Exception as e:
         logger.error(f"Error formatting enhanced weather response: {str(e)}")
         # Fallback to basic formatting
@@ -1207,7 +1218,7 @@ Generate a natural response:"""
         
         return {"final_answer": f"🌤️ Weather in {location}: {temp}°C, {desc}"}
 
-def format_database_response(query: str, data: Any) -> Dict[str, str]:
+def format_database_response(query: str, data: Dict[str, Any]) -> Dict[str, str]:
     """Format database response using LLM with Indian Rupees formatting."""
     try:
         llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", temperature=0)
@@ -1259,9 +1270,20 @@ Instructions:
 
 Response:"""
         
-        response = llm.invoke([HumanMessage(content=prompt)])
-        return {"final_answer": response.content.strip()}
+        # Create a proper input format for the LLM
+        messages = [
+            {"role": "user", "content": prompt}
+        ]
         
+        try:
+            response = llm.invoke([HumanMessage(content=json.dumps({"input": messages}, ensure_ascii=False))])
+            return {"final_answer": response.content.strip()}
+        except Exception as e:
+            logger.error(f"Error in LLM call: {str(e)}")
+            # Fallback to direct prompt if the structured call fails
+            response = llm.invoke([HumanMessage(content=prompt)])
+            return {"final_answer": response.content.strip()}
+            
     except Exception as e:
         logger.error(f"Error formatting database response: {str(e)}")
         logger.error(f"Data that caused the error: {str(data)[:500]}...")  # Log first 500 chars of data

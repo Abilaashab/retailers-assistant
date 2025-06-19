@@ -1,24 +1,40 @@
 import { NextResponse } from 'next/server';
 import { SARVAM_CONFIG, toBcp47Code } from '@/config';
+import { text } from 'stream/consumers';
 
-// Function to clean text for TTS by removing emojis and certain special characters
+// Function to clean text for TTS by removing emojis, URLs, and improving formatting
 function cleanTextForTTS(text: string): string {
-  // Remove emojis and other special characters but keep basic punctuation
-  return text
-    // Remove emojis
+  console.log('Original text:', text);
+  
+  // Clean and format the text with proper sentence endings
+  let cleaned = text
+    // Remove all markdown links and URLs
+    .replace(/\[[^\]]*\]\([^)]+\)/g, '')  // [text](url) -> ''
+    .replace(/https?:\/\/[^\s]+/g, '')     // Remove plain URLs
+    // Remove emojis and special characters
     .replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, '')
     // Remove markdown formatting
-    .replace(/\*([^*]+)\*/g, '$1')
-    // Replace URLs with "Read more"
-    .replace(/Read more: https?:\/\/[^\s]+/g, 'Read more')
-    // Remove other special characters that might affect TTS
-    .replace(/[\u2018\u2019]/g, "'") // Replace smart quotes with straight quotes
+    .replace(/[#*_~`]/g, '')
+    // Replace smart quotes with straight quotes
+    .replace(/[\u2018\u2019]/g, "'")
     .replace(/[\u201C\u201D]/g, '"')
-    // Remove colons and semicolons that aren't part of time or other meaningful patterns
-    .replace(/(?<!(\d{1,2}:\d{2})|(https?:\/\/)|(mailto:))[:;]/g, '')
-    // Remove multiple spaces and trim
+    // Handle list items - convert list markers to periods
+    .replace(/(?:^|\n)\s*[•\-*]\s+|(\d+)\.\s+/g, '. ')
+    // Remove 'Read more' text
+    .replace(/\s*\b(?:Read more|Read More|read more)\b\.?\s*/gi, ' ')
+    // Clean up multiple spaces
     .replace(/\s+/g, ' ')
-    .trim();
+    // Ensure proper sentence endings
+    .replace(/([.!?])\s+/g, '$1 ')
+    .replace(/([^.!?])\s*$/, '$1.')
+    .trim()
+    // Clean up any double periods
+    .replace(/\.+/g, '.')
+    .replace(/([^.])\./g, '$1.')
+    .replace(/\.\s+\./g, '. ');
+    
+  console.log('Cleaned text:', cleaned);
+  return cleaned;
 }
 
 // Get API key from environment variables
