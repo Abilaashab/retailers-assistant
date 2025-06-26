@@ -7,7 +7,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,  # Changed from INFO to DEBUG to see debug messages
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
@@ -50,6 +50,7 @@ class PersonalAssistantAgent:
             
             # Check if this is a goodbye
             if self._is_goodbye(query):
+                logger.info("Query identified as goodbye message")
                 return {
                     "success": True,
                     "response": f"Goodbye, {self.user_name}! Have a wonderful day! 👋",
@@ -59,6 +60,7 @@ class PersonalAssistantAgent:
             
             # Check if this is a greeting
             if self._is_greeting(query):
+                logger.info("Query identified as greeting")
                 return {
                     "success": True,
                     "response": self._generate_greeting(),
@@ -67,6 +69,7 @@ class PersonalAssistantAgent:
                 
             # Check if this is a capabilities query
             if self._is_capabilities_query(query):
+                logger.info("Query identified as capabilities request")
                 return {
                     "success": True,
                     "response": self._list_capabilities(),
@@ -74,16 +77,19 @@ class PersonalAssistantAgent:
                 }
             
             # Use LLM to generate a response
+            logger.info("Generating LLM response for query")
             response = self._generate_llm_response(query)
             
             # Check if the response indicates the query is out of scope
             if self._is_out_of_scope(response):
+                logger.info("LLM response indicates query is out of scope")
                 return {
                     "success": False,
                     "response": self._get_out_of_scope_response(),
                     "type": "out_of_scope"
                 }
             
+            logger.info("Successfully generated response for query")
             return {
                 "success": True,
                 "response": response,
@@ -100,11 +106,59 @@ class PersonalAssistantAgent:
     
     def _is_goodbye(self, query: str) -> bool:
         """Check if the query is a goodbye message."""
+        query_lower = query.lower().strip()
+        
+        # More specific goodbye phrases that are less likely to match other queries
         goodbye_phrases = [
-            "goodbye", "bye", "see you", "see ya", "take care", "farewell",
-            "have a good", "have a nice", "gotta go", "i'm done", "that's all"
+            "goodbye", 
+            "bye", 
+            "see you", 
+            "see ya", 
+            "take care", 
+            "farewell",
+            "i'm done",
+            "that's all",
+            "talk to you later",
+            "catch you later",
+            "until next time",
+            "signing off"
         ]
-        return any(phrase in query.lower() for phrase in goodbye_phrases)
+        
+        # Phrases that should only match at the start/end of the query
+        boundary_phrases = [
+            "have a good",
+            "have a nice"
+        ]
+        
+        logger.debug(f"Checking if '{query_lower}' is a goodbye message")
+        
+        # Check exact matches first
+        if query_lower in ["bye", "goodbye", "exit", "quit"]:
+            logger.debug(f"Exact goodbye match: '{query_lower}'")
+            return True
+            
+        # Check for boundary phrases (must be at start or end)
+        for phrase in boundary_phrases:
+            if (query_lower.startswith(phrase) or 
+                query_lower.endswith(phrase)):
+                logger.debug(f"Matched boundary phrase: '{phrase}' in query: '{query_lower}'")
+                return True
+        
+        # Check for other phrases as whole words only
+        for phrase in goodbye_phrases:
+            # Check exact match
+            if query_lower == phrase:
+                logger.debug(f"Exact phrase match: '{phrase}'")
+                return True
+                
+            # Check as complete words (surrounded by word boundaries or string boundaries)
+            import re
+            if re.search(rf'(^|\s){re.escape(phrase)}(\s|$)', query_lower):
+                logger.debug(f"Whole word match for phrase: '{phrase}' in query: '{query_lower}'")
+                return True
+                
+        logger.debug(f"No goodbye phrases matched in: '{query_lower}'")
+        return False
     
     def _is_greeting(self, query: str) -> bool:
         """Check if the query is a greeting."""

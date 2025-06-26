@@ -1,23 +1,54 @@
 import os
 import json
 import logging
+import logging.config
 import requests
-from typing import Dict, TypedDict, Annotated, List, Literal, Union, Any, Optional
-from dataclasses import dataclass, field
+
 from enum import Enum
-from langgraph.graph import StateGraph, END
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
+from typing import Dict, List, Any, Optional, Union, Annotated, Literal, TypedDict
+from dataclasses import dataclass, field
+from pydantic import BaseModel, Field
 from dotenv import load_dotenv
-from nlq import generate_sql_query, execute_nl_query
-from weather_agent import WeatherAgent
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.messages import HumanMessage, AIMessage
+from langgraph.graph import StateGraph, END
+from langchain_core.runnables import RunnableConfig
+from langchain_core.runnables.base import RunnableLambda
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder, HumanMessagePromptTemplate, SystemMessagePromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.messages import SystemMessage
+from response_utils import format_database_response
+
+# Import agents
 from pa_agent import PersonalAssistantAgent
-from horoscope_agent import HoroscopeAgent
+from analytics_agent import analytics_agent_node
 from news_agent import NewsAgent, NewsArticle
-import decimal
-import traceback
-from datetime import datetime
+from weather_agent import WeatherAgent
+from horoscope_agent import HoroscopeAgent
 from web_search import WebSearchAgent
+
+
+# ── pre-compiled patterns (place near imports) ──────────────────────────────
+import re, logging
+logger = logging.getLogger(__name__)
+
+_GREETING_RE = re.compile(
+    r"\b(hello|hi|hey|greetings|good (morning|afternoon|evening))\b",
+    re.I,
+)
+
+_EXACT_GOODBYE_RE = re.compile(
+    r"^(goodbye|bye|bye bye|see you|see ya|take care|farewell)$",
+    re.I,
+)
+
+_PHRASE_GOODBYE_RE = re.compile(
+    r"(^|\b)(have a (good|nice)\b.*|\b.*have a (good|nice))($|\b)",
+    re.I,
+)
+
+_THANKS_RE = re.compile(r"\b(thank|thanks|appreciate)\b", re.I)
+
 
 # Configure logging
 logging.basicConfig(
@@ -39,6 +70,7 @@ class DecimalEncoder(json.JSONEncoder):
 class AgentType(Enum):
     SUPERVISOR = "supervisor"
     DB_QUERY = "db_query_agent"
+    ANALYTICS = "analytics_agent"
     WEATHER = "weather_agent"
     PERSONAL_ASSISTANT = "personal_assistant"
     HOROSCOPE = "horoscope_agent"
@@ -66,7 +98,7 @@ class AgentConfig:
 # Improved state schema with better typing
 class AgentState(TypedDict):
     messages: Annotated[List[Union[HumanMessage, AIMessage]], lambda x, y: x + y]
-    next: Literal["supervisor", "db_query_agent", "weather_agent", "personal_assistant", "horoscope_agent", END]
+    next: Literal["supervisor", "db_query_agent", "analytics_agent", "weather_agent", "personal_assistant", "horoscope_agent", "news_agent", "web_search_agent", END]
     query: str
     selected_agent: str
     agent_output: Dict[str, Any]
@@ -103,15 +135,45 @@ class SupervisorAgent:
         self.agents = {
             AgentType.DB_QUERY.value: AgentConfig(
                 name="db_query_agent",
-                description="Handles database queries, analytics, and data retrieval operations",
-                keywords=["data", "database", "query", "analytics", "sales", "users", "records", 
-                         "count", "sum", "average", "report", "statistics", "metrics","sell","stock",
-                         "buy","income","revenue","profit","expense","transaction","how much did i earn",
-                         "what's my earnings","show me my","total for","sum of","average","count of",
-                         "report on","data for","metrics for","statistics for","analysis of","financial",
-                         "monthly income","quarterly report","yearly earnings","my sales","my performance",
-                         "my numbers","customers","employees","product","order"
+                description="Handles simple database queries and data retrieval operations",
+                keywords=["data", "database", "query", "sales", "users", "records", 
+                         "count", "sum", "average", "simple", "basic", "single", "direct",
+                         "show me", "list", "get", "find", "lookup", "retrieve", "fetch"
                          ],
+                priority=1
+            ),
+            # All data/analytics queries go to the analytics agent
+            AgentType.ANALYTICS.value: AgentConfig(
+                name="analytics_agent",
+                description="Handles all data, analytics, and business intelligence questions",
+                keywords=[
+                    # Data and database keywords
+                    "data", "database", "query", "sql", "table", "row", "column", "record", "dataset",
+                    # Basic operations
+                    "count", "sum", "total", "average", "avg", "max", "min", "calculate", "compute",
+                    # Query patterns
+                    "show me", "list", "get", "find", "lookup", "retrieve", "fetch", "display", "what is",
+                    "how many", "how much", "what are", "which", "when", "where", "who", "whose",
+                    # Analysis keywords
+                    "analytics", "analysis", "report", "statistics", "metrics", "trend", "insight",
+                    "compare", "versus", "vs", "difference", "growth", "decline", "change", "trend",
+                    "performance", "efficiency", "productivity", "kpi", "metric", "measure", "ratio",
+                    "how is", "why is", "what are the", "show me the", "analyze", "evaluate", "assess",
+                    # Business domains
+                    "sales", "revenue", "profit", "expense", "cost", "price", "inventory", "stock",
+                    "customer", "client", "user", "product", "item", "order", "transaction", "purchase",
+                    "quantity", "remaining", "available", "in stock", "stock level", "stock status", "inventory level",
+                    # Time periods
+                    "today", "yesterday", "this week", "last week", "this month", "last month",
+                    "this quarter", "last quarter", "this year", "last year", "year to date", "ytd",
+                    # Business intelligence
+                    "business intelligence", "data analysis", "market analysis", "sales analysis",
+                    "financial analysis", "performance review", "quarterly review", "annual report",
+                    "year over year", "month over month", "quarter over quarter", "yoy", "mom", "qoq",
+                    # Common question patterns
+                    "top", "bottom", "best", "worst", "highest", "lowest", "most", "least", "between",
+                    "by", "per", "for each", "group by", "sort by", "order by", "filter", "where"
+                ],
                 priority=1
             ),
             AgentType.WEATHER.value: AgentConfig(
@@ -161,13 +223,18 @@ class SupervisorAgent:
     def route_query(self, query: str) -> Dict[str, Any]:
         """Enhanced routing logic with keyword matching first, then LLM, then fallback."""
         try:
-            # Try keyword-based routing first
-            keyword_result = self._keyword_route_query(query)
-            if keyword_result.get("confidence", 0) >= 0.4:
-                return keyword_result
+            if not query or not query.strip():
+                logger.warning("Empty query received")
+                return {
+                    "agent": AgentType.PERSONAL_ASSISTANT.value,
+                    "confidence": 1.0,
+                    "reasoning": "Empty query",
+                    "method": "empty_query"
+                }
             
-            # Then check if this is a greeting or general query
+            # First check if this is a general query
             if self._is_general_query(query):
+                logger.info(f"Query identified as general query: {query}")
                 return {
                     "agent": AgentType.PERSONAL_ASSISTANT.value,
                     "confidence": 0.9,
@@ -175,12 +242,21 @@ class SupervisorAgent:
                     "method": "direct"
                 }
             
-            # If keyword routing fails or has low confidence, try LLM routing
+            # Try keyword-based routing first
+            keyword_result = self._keyword_route_query(query)
+            if keyword_result.get("confidence", 0) >= 0.8:  # High confidence match
+                logger.info(f"Keyword routing to {keyword_result['agent']} with confidence {keyword_result['confidence']}")
+                return keyword_result
+            
+            # If keyword routing has low confidence, try LLM routing
+            logger.info("Attempting LLM routing due to low keyword confidence")
             llm_result = self._llm_route_query(query)
             if llm_result.get("confidence", 0) >= 0.4:
+                logger.info(f"LLM routing to {llm_result['agent']} with confidence {llm_result['confidence']}")
                 return llm_result
             
-            # If both keyword and LLM routing fail, fallback to personal assistant
+            # Fallback to personal assistant with logging
+            logger.warning(f"Falling back to personal assistant for query: {query}")
             return {
                 "agent": AgentType.PERSONAL_ASSISTANT.value,
                 "confidence": 0.7,
@@ -199,119 +275,197 @@ class SupervisorAgent:
             }
     
     def _is_general_query(self, query: str) -> bool:
-        """Check if the query is a general conversation or greeting."""
-        if not query or not query.strip():
+        """Return True for greetings, thanks, capability questions, or good-byes."""
+        q = query.strip().lower()
+
+        if not q:
+            logger.debug("Empty query → treat as general")
             return True
-            
-        query_lower = query.lower().strip()
-        
-        # Check for goodbyes first
-        goodbye_phrases = ["goodbye", "bye", "see you", "see ya", "take care", "farewell", "have a good", "have a nice"]
-        if any(phrase in query_lower for phrase in goodbye_phrases):
+
+    # ── greetings ──────────────────────────────────────────────────────────
+        if _greeting_regex.search(q):
+            logger.debug("Greeting detected")
             return True
-            
-        # Check for greetings
-        greetings = ["hello", "hi", "hey", "greetings", "good morning", "good afternoon", "good evening"]
-        if any(greeting in query_lower for greeting in greetings):
+
+    # ── good-byes ──────────────────────────────────────────────────────────
+        if _exact_goodbye_regex.fullmatch(q):
+            logger.debug("Exact goodbye detected")
             return True
-            
-        # Check for thanks
-        if any(phrase in query_lower for phrase in ["thank", "thanks", "appreciate"]):
+
+        if _phrase_goodbyes_regex.search(q):
+            logger.debug("Phrase goodbye detected")
             return True
-            
-        # Check for capabilities questions
-        if any(phrase in query_lower for phrase in ["what can you do", "help", "capabilities", "who are you"]):
+
+    # whole-word goodbye words (e.g., “bye everyone”)
+        if _goodbye_words_regex.search(q):
+            logger.debug("Goodbye word detected")
             return True
-            
-        # Check for general conversation
-        general_phrases = [
-            "how are you", "what's up", "how's it going", "how do you do",
-            "tell me about yourself", "who made you", "what are you",
-            "your name"
-        ]
-        if any(phrase in query_lower for phrase in general_phrases):
+
+    # ── thanks ────────────────────────────────────────────────────────────
+        if _thanks_regex.search(q):
+            logger.debug("Thanks detected")
             return True
-            
+
+    # ── capability / meta questions ───────────────────────────────────────
+        if any(p in q for p in capability_phrases):
+            logger.debug("Capability question detected")
+            return True
+
+    # ── small-talk / generic conversation ─────────────────────────────────
+        if any(p in q for p in general_phrases):
+            logger.debug("General conversational phrase detected")
+            return True
+
+    # ── nothing matched ───────────────────────────────────────────────────
+        logger.debug("Query does not match any general patterns")
         return False
     
     def _keyword_route_query(self, query: str) -> Dict[str, Any]:
-        """Keyword-based routing logic."""
+        """Keyword-based routing logic with whole word matching."""
         query_lower = query.lower()
+        query_words = set(query_lower.split())  # Split query into individual words for whole word matching
+        
+        def contains_phrase(phrases, text):
+            """Check if any phrase in the list is present in the text."""
+            for phrase in phrases:
+                if ' ' in phrase:
+                    # For multi-word phrases, check if the entire phrase is in the query
+                    if phrase in text:
+                        return True
+                else:
+                    # For single words, check if it's a complete word in the query
+                    if phrase in query_words:
+                        return True
+            return False
         
         # Check for common horoscope-related questions
-        horoscope_indicators = [
+        horoscope_phrases = [
             "how will my day", "how's my day", "what does my day look like",
             "how is my day", "how's today looking", "how will today be",
             "what does today hold", "what's in store today",
             "will it be a good day", "good day for me", "lucky day", "unlucky day",
             "what should i avoid", "should i avoid", "be careful", "watch out for",
             "advice for today", "daily advice", "guidance for today", "prediction",
-            "fortune", "what the stars say", "cosmic guidance", "astral forecast",
+            "fortune", "what the stars say", "cosmic guidance", "astral forecast"
+        ]
+        horoscope_words = [
             "horoscope", "zodiac", "astrology", "star sign", "birth sign",
-            "day today for ", "horoscope for ", "zodiac for ", "sign for ",
             "aries", "taurus", "gemini", "cancer", "leo", "virgo", 
             "libra", "scorpio", "sagittarius", "capricorn", "aquarius", "pisces"
         ]
         
         # Check for news-related queries
-        news_indicators = [
-            "news", "headlines", "current events", "latest news", "business news", 
-            "market news", "financial news", "stock market", "economy", "politics", 
-            "world news", "breaking news", "update", "what's happening", "tell me about", 
-            "what's new", "recent developments", "retail news", "tax updates", "budget", 
-            "economic policy", "business trends", "what's going on", "any updates on",
-            "latest on", "recent news about", "any news about"
+        news_phrases = [
+            "latest news", "business news", "market news", "financial news",
+            "stock market", "world news", "breaking news", "recent developments",
+            "retail news", "tax updates", "economic policy", "business trends",
+            "what's going on", "any updates on", "latest on", "recent news about",
+            "any news about"
+        ]
+        news_words = [
+            "news", "headlines", "economy", "politics", "update", "happening"
         ]
         
         # Check for database queries
-        db_query_indicators = [
-            "income", "revenue", "sales", "profit", "expense", "transaction", 
+        db_phrases = [
             "how much did i earn", "what's my earnings", "show me my", 
-            "total for", "sum of", "average", "count of", "report on",
-            "data for", "metrics for", "statistics for", "analysis of",
-            "financial", "monthly income", "quarterly report", "yearly earnings",
-            "my sales", "my performance", "my numbers", "customers", "employees", 
-            "product", "order", "sell", "stock", "buy"
+            "total for", "sum of", "count of", "report on", "data for",
+            "metrics for", "statistics for", "analysis of", "monthly income",
+            "quarterly report", "yearly earnings", "my sales", "my performance",
+            "my numbers", "quantity of", "remaining quantity", "how many left",
+            "stock level", "inventory level", "available quantity", "stock status",
+            "in stock", "how much do i have", "current stock", "current inventory"
+        ]
+        db_words = [
+            "income", "revenue", "sales", "profit", "expense", "transaction",
+            "average", "financial", "customers", "employees", "product",
+            "order", "sell", "stock", "buy", "remaining", "quantity",
+            "shampoo", "ml", "180ml"
+        ]
+        
+        # Check for analytics queries
+        analytics_phrases = [
+            "business intelligence", "data analysis", "market analysis", "sales analysis",
+            "financial analysis", "performance review", "quarterly review", "annual report",
+            "year over year", "month over month", "quarter over quarter", "show me the"
+        ]
+        analytics_words = [
+            "analytics", "analysis", "report", "statistics", "metrics", "trend",
+            "insight", "compare", "versus", "vs", "difference", "growth", "decline",
+            "change", "performance", "efficiency", "productivity", "kpi", "metric",
+            "measure", "analyze", "evaluate", "yoy", "mom", "qoq"
         ]
         
         # Check for weather queries
-        weather_indicators = [
-            "weather", "temperature", "forecast", "rain", "snow", "sunny", "cloudy", 
-            "humidity", "wind", "storm", "degrees", "hot", "cold", "chance of rain",
-            "how's the weather", "what's the weather", "will it rain", 
-            "is it going to rain", "do i need an umbrella", "degree","celcius"
+        weather_phrases = [
+            "chance of rain", "how's the weather", "what's the weather",
+            "will it rain", "is it going to rain", "do i need an umbrella"
+        ]
+        weather_words = [
+            "weather", "temperature", "forecast", "rain", "snow", "sunny",
+            "cloudy", "humidity", "wind", "storm", "degrees", "hot", "cold",
+            "degree", "celcius"
         ]
         
         # Check each type of query in order of priority
-        if any(indicator in query_lower for indicator in horoscope_indicators):
+        # First check for inventory-related queries
+        inventory_keywords = ["quantity", "remaining", "stock", "inventory", "shampoo", "ml"]
+        inventory_count = sum(1 for word in inventory_keywords if word in query_words)
+        if inventory_count >= 2:  # Require at least 2 inventory-related keywords
+            return {
+                "agent": AgentType.ANALYTICS.value,
+                "confidence": 0.95,
+                "reasoning": f"Query contains {inventory_count} inventory-related keywords",
+                "method": "keyword"
+            }
+
+        # Check for horoscope queries (both phrases and individual words)
+        if (contains_phrase(horoscope_phrases, query_lower) or 
+            any(word in query_words for word in horoscope_words)):
             return {
                 "agent": AgentType.HOROSCOPE.value,
                 "confidence": 0.95,
-                "reasoning": "Query contains common horoscope-related phrases",
+                "reasoning": "Query contains horoscope-related terms",
                 "method": "keyword"
             }
         
-        if any(indicator in query_lower for indicator in news_indicators):
+        # Check for news queries (both phrases and individual words)
+        if (contains_phrase(news_phrases, query_lower) or 
+            any(word in query_words for word in news_words)):
             return {
                 "agent": AgentType.NEWS.value,
                 "confidence": 0.9,
-                "reasoning": "Query contains news-related keywords",
+                "reasoning": "Query contains news-related terms",
                 "method": "keyword"
             }
         
-        if any(indicator in query_lower for indicator in db_query_indicators):
+        # Check for database queries (both phrases and individual words)
+        if (contains_phrase(db_phrases, query_lower) or 
+            any(word in query_words for word in db_words)):
             return {
-                "agent": AgentType.DB_QUERY.value,
+                "agent": AgentType.ANALYTICS.value,  # Using ANALYTICS instead of DB_QUERY as per original
                 "confidence": 0.95,
-                "reasoning": "Query contains database-related keywords",
+                "reasoning": "Query contains database-related terms",
                 "method": "keyword"
             }
         
-        if any(indicator in query_lower for indicator in weather_indicators):
+        # Check for analytics queries (both phrases and individual words)
+        if (contains_phrase(analytics_phrases, query_lower) or 
+            any(word in query_words for word in analytics_words)):
+            return {
+                "agent": AgentType.ANALYTICS.value,
+                "confidence": 0.95,
+                "reasoning": "Query contains analytics-related terms",
+                "method": "keyword"
+            }
+        
+        # Check for weather queries (both phrases and individual words)
+        if (contains_phrase(weather_phrases, query_lower) or 
+            any(word in query_words for word in weather_words)):
             return {
                 "agent": AgentType.WEATHER.value,
                 "confidence": 0.9,
-                "reasoning": "Query contains weather-related keywords",
+                "reasoning": "Query contains weather-related terms",
                 "method": "keyword"
             }
         
@@ -416,6 +570,13 @@ Please analyze the query and provide your routing decision:"""
                 "How much revenue did we make?",
                 "Show me customer statistics",
                 "What's my current inventory?"
+            ],
+            AgentType.ANALYTICS.value: [
+                "What are the sales trends for the last quarter?",
+                "How does our revenue compare to last year?",
+                "What are the top 5 products by sales?",
+                "What is the average order value?",
+                "What is the customer retention rate?"
             ],
             AgentType.HOROSCOPE.value: [
                 "What's my horoscope for today?",
@@ -682,7 +843,22 @@ def supervisor_node(state: AgentState) -> Dict[str, Any]:
     routing_result = supervisor.route_query(query)
     selected_agent = routing_result["agent"]
     
-    logger.info(f"Query: '{query}' -> Agent: {selected_agent} (confidence: {routing_result['confidence']:.2f})")
+    # Force all data-related queries to use analytics_agent
+    if selected_agent == AgentType.DB_QUERY.value:
+        selected_agent = AgentType.ANALYTICS.value
+        routing_result["method"] = "redirected_to_analytics"
+        routing_result["reasoning"] = "All data queries are now handled by the analytics agent"
+    
+    # Log the routing decision with more context
+    logger.info(f"[Supervisor] Query: '{query}' -> Agent: {selected_agent} (confidence: {routing_result['confidence']:.2f})")
+    
+    # If we're routing to analytics_agent, log the full state for debugging
+    if selected_agent == AgentType.ANALYTICS.value:
+        logger.info(f"[Supervisor] Routing to analytics_agent with state keys: {list(state.keys())}")
+        if 'messages' in state and state['messages']:
+            logger.info(f"[Supervisor] Last message: {state['messages'][-1]}")
+        if 'query' in state:
+            logger.info(f"[Supervisor] Query in state: {state['query']}")
     
     return {
         "next": selected_agent,
@@ -1207,69 +1383,6 @@ Generate a natural response:"""
         
         return {"final_answer": f"🌤️ Weather in {location}: {temp}°C, {desc}"}
 
-def format_database_response(query: str, data: Any) -> Dict[str, str]:
-    """Format database response using LLM with Indian Rupees formatting."""
-    try:
-        llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", temperature=0)
-        
-        # Helper function to serialize data with proper date handling
-        def serialize_data(data):
-            if data is None:
-                return "No data available"
-                
-            if isinstance(data, (list, tuple)):
-                return [serialize_data(item) for item in data]
-                
-            if isinstance(data, dict):
-                return {k: serialize_data(v) for k, v in data.items()}
-                
-            # Handle date and datetime objects
-            if hasattr(data, 'isoformat'):
-                return data.isoformat()
-                
-            # Handle Decimal and other numeric types
-            if isinstance(data, (int, float, decimal.Decimal)):
-                # Format as INR if it looks like a currency amount
-                if abs(data) >= 1 and ('.' not in str(data) or str(data).endswith('.0')):
-                    return f"₹{data:,.0f}"
-                return f"₹{float(data):,.2f}" if data else "₹0.00"
-                
-            return str(data)
-        
-        # Serialize the data before JSON dumps
-        serialized_data = serialize_data(data)
-        
-        prompt = f"""Generate a concise, natural language answer for the user query based on the data provided.
-
-User Query: {query}
-
-Data:
-{json.dumps(serialized_data, indent=2, ensure_ascii=False, default=str)}
-
-Instructions:
-- If data is empty or None, politely indicate no results were found
-- Format all monetary values in Indian Rupees (₹) instead of dollars
-- For any currency amounts, use the format: ₹X,XXX.XX (e.g., ₹1,234.56)
-- Summarize key findings in a user-friendly way
-- Use appropriate emojis and formatting
-- Keep the response concise but informative
-- Example: Instead of $100, show as ₹100
-- For date ranges, show the range in a readable format (e.g., "April 1-30, 2025")
-- For daily data, summarize the key trends and highlight any significant values
-
-Response:"""
-        
-        response = llm.invoke([HumanMessage(content=prompt)])
-        return {"final_answer": response.content.strip()}
-        
-    except Exception as e:
-        logger.error(f"Error formatting database response: {str(e)}")
-        logger.error(f"Data that caused the error: {str(data)[:500]}...")  # Log first 500 chars of data
-        return {
-            "final_answer": "📊 I found some data but encountered an issue formatting it. " \
-                          "Please try rephrasing your query or ask for specific details."
-        }
-
 def web_search_agent_node(state: AgentState) -> Dict[str, Any]:
     """Web search agent node to handle web search queries."""
     try:
@@ -1356,34 +1469,40 @@ def create_enhanced_workflow() -> StateGraph:
     """Create and configure the enhanced workflow graph."""
     workflow = StateGraph(AgentState)
     
-    # Add nodes
+    # Add nodes - only include analytics_agent, not db_query_agent
     workflow.add_node("supervisor", supervisor_node)
-    workflow.add_node("db_query_agent", db_query_agent_node)
+    workflow.add_node("analytics_agent", analytics_agent_node)
     workflow.add_node("weather_agent", enhanced_weather_agent_node)
+    workflow.add_node("personal_assistant", personal_assistant_node)
     workflow.add_node("horoscope_agent", horoscope_agent_node)
     workflow.add_node("news_agent", news_agent_node)
-    workflow.add_node("personal_assistant", personal_assistant_node)
     workflow.add_node("web_search_agent", web_search_agent_node)
     workflow.add_node("final_response", enhanced_final_response_node)
     
-    # Define conditional edges
+    # Add edges - no db_query_agent edge
+    workflow.add_edge("analytics_agent", "final_response")
+    workflow.add_edge("weather_agent", "final_response")
+    workflow.add_edge("personal_assistant", "final_response")
+    workflow.add_edge("horoscope_agent", "final_response")
+    workflow.add_edge("news_agent", "final_response")
+    workflow.add_edge("web_search_agent", "final_response")
+    
+    # Add conditional edges
     workflow.add_conditional_edges(
         "supervisor",
         lambda x: x["next"],
         {
-            "db_query_agent": "db_query_agent",
+            # All data/analytics queries go to analytics_agent
+            "db_query_agent": "analytics_agent",  # Redirect any remaining db_query_agent calls to analytics_agent
+            "analytics_agent": "analytics_agent",
             "weather_agent": "weather_agent",
+            "personal_assistant": "personal_assistant",
             "horoscope_agent": "horoscope_agent",
             "news_agent": "news_agent",
-            "personal_assistant": "personal_assistant",
             "web_search_agent": "web_search_agent",
-            END: "final_response"
-        }
+            END: END,
+        },
     )
-    
-    # Add edges from agent nodes to final response
-    for node in ["db_query_agent", "weather_agent", "horoscope_agent", "news_agent", "personal_assistant", "web_search_agent"]:
-        workflow.add_edge(node, "final_response")
     
     # Set entry point
     workflow.set_entry_point("supervisor")
@@ -1562,7 +1681,7 @@ if __name__ == "__main__":
                     continue
                     
                 # Check for goodbye messages
-                goodbye_phrases = ['quit', 'exit', 'q', 'bye', 'goodbye', 'see you', 'see ya']
+                goodbye_phrases = ['quit', 'exit', 'bye', 'goodbye', 'see you', 'see ya']
                 if any(phrase in query.lower() for phrase in goodbye_phrases):
                     print("\nXenie: Goodbye! Have a wonderful day! 👋")
                     break

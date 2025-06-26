@@ -1,11 +1,15 @@
 import os
 import json
+import logging
 import decimal
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 from dotenv import load_dotenv
 import google.generativeai as genai
 from data import execute_query  # Import the execute_query function from data.py
+
+# Set up logging
+logger = logging.getLogger(__name__)
 
 # Custom JSON encoder to handle Decimal types
 class DecimalEncoder(json.JSONEncoder):
@@ -28,47 +32,88 @@ model = genai.GenerativeModel(MODEL_NAME)
 SCHEMA_INFO = """
 Database Schema Details (Note: Column names are case-sensitive):
 
-1. TABLE: customer_info
-   Description: Stores information about customers.
-   Columns (use exact case as shown):
-   - "CustomerID" (bigint, PRIMARY KEY): Unique identifier for each customer
-   - "Name" (text): Name of the customer
-   - "Gender" (text): Gender of the customer
-   - "Age" (bigint): Age of the customer
-   - "LoyaltyCard" (text): Loyalty card information
-   - "AvgSpending" (double precision): Average spending of the customer
-   - "VisitFrequency" (bigint): Frequency of visits by the customer
+Table: batch
+  - id: Unique ID of the batch (primary key)
+  - distributor: Name of the distributor from whom the batch was purchased
+  - purchase_date: Date when the batch was purchased
+  - purchased_quantity: Total quantity purchased in the batch
+  - remaining: Quantity still remaining in stock
+  - purchace_price: Purchase price per unit from distributor
+  - selling_price: Selling price per unit to customers
+  - commission: Commission per unit if any
+  - expiry: Expiry date of the product batch
 
-2. TABLE: employee_performance
-   Description: Tracks the performance of employees.
-   Columns (use exact case as shown):
-   - "EmployeeID" (bigint, PRIMARY KEY): Unique identifier for each employee
-   - "Name" (text): Name of the employee
-   - "SalesMade" (bigint): Number of sales made by the employee
-   - "AvgTransactionValue" (double precision): Average transaction value
+Table: customers
+  - id: Unique ID of the customer (primary key)
+  - name: Name of the customer
+  - mobile_no: Customer's mobile number
+  - address: Customer’s address
+  - age: Age of the customer
+  - gender: Gender of the customer
+  - avg_visit: Average number of visits per month
+  - avg_spending: Average spending per visit
+  - loyalty_points: Loyalty points accumulated by the customer
 
-3. TABLE: sales_transactions
-   Description: Records sales transactions.
-   Columns (use exact case as shown):
-   - "TransactionID" (bigint, PRIMARY KEY): Unique identifier for each transaction
-   - "DateTime" (timestamp with time zone): Date and time of the transaction
-   - "Product" (text): Product sold
-   - "Quantity" (bigint): Quantity of the product sold
-   - "Price" (double precision): Price of the product
-   - "PaymentMethod" (text): Method of payment used
-   - "DiscountApplied" (text): Any discount applied
-   - "EmployeeID" (bigint, FOREIGN KEY): References employee_performance("EmployeeID")
-   - "CustomerID" (bigint, FOREIGN KEY): References customer_info("CustomerID")
+Table: employees
+  - id: Unique ID of the employee (primary key)
+  - name: Name of the employee
+  - age: Age of the employee
+  - gender: Gender of the employee
+  - mobile_no: Employee's mobile number
+  - address: Address of the employee
+  - shift: Work shift of the employee (e.g., morning, evening)
+  - blood_group: Blood group of the employee
+
+Table: products         
+  - id: Unique ID of the product (primary key)
+  - product_name: Name of the product
+  - category: Category the product belongs to (e.g., snacks, beverages)
+  - brand: Brand of the product
+  - unit: Unit of measurement (e.g., piece, kg)
+  - batch_number: ID of the batch the product came from (foreign key to batch)
+  - max_stocking_quantity: Maximum stock level allowed
+  - reorder_level: Minimum stock level before reordering
+
+Table: transactions
+  - id: Unique ID of the transaction (primary key)
+  - order_id: Unique order number for the transaction
+  - customer_id: ID of the customer involved (foreign key)
+  - employee_id: ID of the employee who handled the transaction (foreign key)
+  - transaction_amount: Total transaction value
+  - payment_method: Method of payment (e.g., cash, UPI)
+  - date_time: Date and time of the transaction
+
+Table: orders
+  - id: Unique ID of the order entry (primary key)
+  - order_id: Order number referencing the transaction (foreign key)
+  - product_id: ID of the product purchased (foreign key)
+  - quantity: Quantity of the product purchased
+  - price: Price per unit
+  - amount: Total amount before tax
+  - igst_percentage: IGST percentage applicable
+  - igst_amount: IGST amount calculated
+  - cgst_percentage: CGST percentage applicable
+  - cgst_amount: CGST amount calculated
+  - sgst_percentage: SGST percentage applicable
+  - sgst_amount: SGST amount calculated
+  - total_gst: Total GST amount (IGST + CGST + SGST)
+  - final_amount: Final amount after adding tax
 
 Relationships:
-- sales_transactions."EmployeeID" → employee_performance."EmployeeID"
-- sales_transactions."CustomerID" → customer_info."CustomerID"
+ - transactions."employee_id" → employees."id"
+ - transactions."customer_id" → customers."id"
+ - transactions."order_id" → orders."order_id"
+ - orders."product_id" → products."id"
+ - products."batch_number" → batch."id"
+
 
 Query Guidelines:
-1. Always join to customer_info to get customer names when CustomerID is involved
-2. Always join to employee_performance to get employee names when EmployeeID is involved
+1. Always join to customers to get customer names when customer_id is involved
+2. Always join to employees to get employee names when employee_id is involved
 3. Prefer human-readable names over IDs in results
-4. Use table aliases for better readability (e.g., 'c' for customer_info, 'e' for employee_performance, 's' for sales_transactions)
+4. Use table aliases for better readability (e.g., 'c' for customers, 'e' for employees, 't' for transactions)
+5. The Transactions table has a one-to-many relationship with the Orders table, meaning each transaction can have multiple associated orders.
+6. For GST info join transactions and orders table to get the GST details.
 
 Important Notes:
 1. Always use double quotes around column and table names to preserve case
@@ -124,13 +169,20 @@ def generate_sql_query(natural_language_query: str) -> Dict[str, Any]:
         Current year: {current_year}
 
         Important Notes:
-        1. For customer-related queries, join with customer_info table to get customer details
-        2. Do not use any tables or columns that are not listed above
-        3. For date comparisons, use the DATE() function to extract just the date part
-        4. For monetary values, use the SUM() function to calculate totals
-        5. Always include the DATE() function when filtering by date
-        6. When a date is mentioned without a year, assume the current year ({current_year}) unless specified otherwise
+        1. For sales-related queries, join the transactions and orders tables to get complete sales data
+        2. For date filtering, use EXTRACT(MONTH FROM t.date_time) = 1 for January, EXTRACT(YEAR FROM t.date_time) = {current_year} for current year
+        3. For monetary values, use the SUM() function to calculate totals from the orders.final_amount column
+        4. Always include the DATE() function when filtering by date
+        5. When a date is mentioned without a year, assume the current year ({current_year}) unless specified otherwise
+        6. For monthly sales, group by month using DATE_TRUNC('month', t.date_time)
         7. Return only valid PostgreSQL SQL
+        
+        Example for January sales this year:
+        SELECT SUM(o.final_amount) as total_sales
+        FROM transactions t
+        JOIN orders o ON t.id = o.transaction_id
+        WHERE EXTRACT(MONTH FROM t.date_time) = 1 
+          AND EXTRACT(YEAR FROM t.date_time) = EXTRACT(YEAR FROM CURRENT_DATE)
         
         User query: "{natural_language_query}"
         
@@ -229,19 +281,142 @@ def execute_nl_query(natural_language_query: str) -> Dict[str, Any]:
     Returns:
         Dict: The query results and metadata
     """
-    if DEBUG:
-        print(f"\n[DEBUG] Starting query execution for: {natural_language_query}")
+    logger = logging.getLogger(__name__)
     
-    # First generate the SQL query
-    sql_result = generate_sql_query(natural_language_query)
+    # Ensure we have a valid query
+    if not natural_language_query or not natural_language_query.strip():
+        error_msg = "Empty query provided"
+        logger.error(f"[NLQ] {error_msg}")
+        return {
+            "success": False,
+            "error": error_msg,
+            "assumptions": [],
+            "notes": "No query provided"
+        }
+        
+    logger.info(f"[NLQ] Starting query execution for: {natural_language_query}")
     
-    if DEBUG:
-        print("\n=== SQL GENERATION RESULT OBJECT ===")
+    try:
+        # First generate the SQL query
+        logger.info("[NLQ] Generating SQL query...")
+        sql_result = generate_sql_query(natural_language_query)
+        
+        # Log the SQL generation result
+        logger.info(f"[NLQ] SQL Generation - Success: {sql_result.get('success', False)}")
+        if not sql_result.get('success', False):
+            error_msg = sql_result.get('error', 'Unknown error during SQL generation')
+            logger.error(f"[NLQ] SQL Generation Error: {error_msg}")
+            return {
+                "success": False,
+                "error": error_msg,
+                "assumptions": sql_result.get('assumptions', []),
+                "notes": "Failed to generate SQL query"
+            }
+            
+        sql_query = sql_result.get('sql', '').strip()
+        if not sql_query:
+            error_msg = "Generated SQL query is empty"
+            logger.error(f"[NLQ] {error_msg}")
+            return {
+                "success": False,
+                "error": error_msg,
+                "assumptions": sql_result.get('assumptions', []),
+                "notes": "Empty SQL query generated"
+            }
+            
+        logger.info(f"[NLQ] Generated SQL: {sql_query}")
+        logger.info(f"[NLQ] Assumptions: {sql_result.get('assumptions', [])}")
+        logger.info(f"[NLQ] Notes: {sql_result.get('notes', '')}")
+        
+        if DEBUG:
+            print("=== SQL GENERATION RESULT ===")
+            print(json.dumps(sql_result, indent=2, ensure_ascii=False, cls=DecimalEncoder))
+            print("=============================\n")
+        
+        # Check if SQL generation was successful
+        if not sql_result.get("success", False):
+            logger.error(f"[NLQ] Failed to generate SQL. Error: {sql_result.get('error', 'No error details')}")
+            return {
+                "success": False,
+                "error": sql_result.get("error", "Failed to generate SQL query"),
+                "assumptions": sql_result.get("assumptions", []),
+                "notes": sql_result.get("notes", "SQL generation failed")
+            }
+        
+        try:
+            logger.info(f"[NLQ] Executing SQL query: {sql_query}")
+            
+            # Execute the actual query using the Supabase connection
+            if DEBUG:
+                print(f"[DEBUG] Executing PostgreSQL query: {sql_query}")
+                
+            results = execute_query(sql_query)
+            logger.info(f"[NLQ] Query executed successfully. Rows returned: {len(results) if results else 0}")
+            
+            if DEBUG and results:
+                print(f"[DEBUG] Query returned {len(results)} rows")
+            
+            if not results:
+                return {
+                    "success": True,
+                    "sql": sql_query,
+                    "assumptions": sql_result.get("assumptions", []),
+                    "notes": "Query executed successfully but returned no results",
+                    "data": []
+                }
+                
+            # Convert datetime objects to strings if present
+            for row in results:
+                for key, value in row.items():
+                    if isinstance(value, (datetime, str)) and ('date' in key.lower() or 'time' in key.lower()):
+                        try:
+                            # Convert string to datetime and back to standard format
+                            dt = datetime.fromisoformat(value) if isinstance(value, str) else value
+                            row[key] = dt.strftime('%Y-%m-%d %H:%M:%S')
+                        except (ValueError, TypeError):
+                            pass
+            
+            if DEBUG:
+                print("[DEBUG] Query executed successfully. Result data:")
+                print(json.dumps(results, indent=2, ensure_ascii=False, cls=DecimalEncoder))
+            
+            return {
+                "success": True,
+                "sql": sql_query,
+                "assumptions": sql_result.get("assumptions", []),
+                "notes": sql_result.get("notes", "Query executed successfully"),
+                "data": results
+            }
+            
+        except Exception as e:
+            error_msg = f"[NLQ] Error executing query: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            if DEBUG:
+                print("[DEBUG] Error executing query:")
+                print(json.dumps({"error": str(e), "sql": sql_query}, indent=2, ensure_ascii=False, cls=DecimalEncoder))
+            return {
+                "success": False,
+                "error": f"Error executing query: {str(e)}",
+                "sql": sql_query,
+                "assumptions": sql_result.get("assumptions", []),
+                "notes": "Query execution failed"
+            }
+    
+    except Exception as e:
+        error_msg = f"Error in execute_nl_query: {str(e)}"
+        logger.error(f"[NLQ] {error_msg}", exc_info=True)
+        return {
+            "success": False,
+            "error": error_msg,
+            "assumptions": [],
+            "notes": "Error during query execution"
+        }
         print(json.dumps(sql_result, indent=2, ensure_ascii=False, cls=DecimalEncoder))
         print("=" * 40 + "\n")
     
     # Check if SQL generation was successful
     if not sql_result.get("success", False):
+        logger.error(f"[NLQ] Failed to generate SQL. Error: {sql_result.get('error', 'No error details')}")
         return {
             "success": False,
             "error": sql_result.get("error", "Failed to generate SQL query"),
@@ -252,10 +427,17 @@ def execute_nl_query(natural_language_query: str) -> Dict[str, Any]:
     sql_query = sql_result["sql"]
     
     try:
+        logger.info(f"[NLQ] Executing SQL query: {sql_query}")
+        
         # Execute the actual query using the Supabase connection
         if DEBUG:
             print(f"[DEBUG] Executing PostgreSQL query: {sql_query}")
+            
         results = execute_query(sql_query)
+        logger.info(f"[NLQ] Query executed successfully. Rows returned: {len(results) if results else 0}")
+        
+        if DEBUG and results:
+            print(f"[DEBUG] Query returned {len(results)} rows")
         
         if not results:
             return {
@@ -290,6 +472,8 @@ def execute_nl_query(natural_language_query: str) -> Dict[str, Any]:
         }
         
     except Exception as e:
+        error_msg = f"[NLQ] Error executing query: {str(e)}"
+        logger.error(error_msg, exc_info=True)
         if DEBUG:
             print("[DEBUG] Error executing query:")
             print(json.dumps({"error": str(e), "sql": sql_query}, indent=2, ensure_ascii=False, cls=DecimalEncoder))
