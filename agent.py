@@ -29,25 +29,59 @@ from web_search import WebSearchAgent
 
 
 # ── pre-compiled patterns (place near imports) ──────────────────────────────
+# ── pre-compiled regexes using YOUR list variable names ─────────────────────
 import re, logging
 logger = logging.getLogger(__name__)
 
-_GREETING_RE = re.compile(
-    r"\b(hello|hi|hey|greetings|good (morning|afternoon|evening))\b",
+# keep the list literals for clarity / future editing
+greetings = ["hello", "hi", "hey", "greetings",
+             "good morning", "good afternoon", "good evening"]
+
+exact_goodbyes = ["goodbye", "bye", "bye bye", "see you",
+                  "see ya", "take care", "farewell"]
+
+phrase_goodbyes = ["have a good", "have a nice"]
+
+goodbye_words = ["goodbye", "bye", "farewell", "see you", "see ya", "take care"]
+
+thanks_phrases = ["thank", "thanks", "appreciate"]
+
+capability_phrases = ["what can you do", "help", "capabilities", "who are you"]
+
+general_phrases = [
+    "how are you", "what's up", "how's it going", "how do you do",
+    "tell me about yourself", "who made you", "what are you", "your name"
+]
+
+# ① regex for greetings (whole-word match)
+_greetings_regex = re.compile(
+    r"\b(" + "|".join(map(re.escape, greetings)) + r")\b",
     re.I,
 )
 
-_EXACT_GOODBYE_RE = re.compile(
-    r"^(goodbye|bye|bye bye|see you|see ya|take care|farewell)$",
+# ② regex for exact good-byes (entire query must match)
+_exact_goodbye_regex = re.compile(
+    r"^(" + "|".join(map(re.escape, exact_goodbyes)) + r")$",
     re.I,
 )
 
-_PHRASE_GOODBYE_RE = re.compile(
-    r"(^|\b)(have a (good|nice)\b.*|\b.*have a (good|nice))($|\b)",
+# ③ regex for phrase good-byes at either end
+_phrase_goodbyes_regex = re.compile(
+    r"(^|\b)(" + "|".join(map(re.escape, phrase_goodbyes)) + r")(\b|$)",
     re.I,
 )
 
-_THANKS_RE = re.compile(r"\b(thank|thanks|appreciate)\b", re.I)
+# ④ regex for thanks
+_thanks_regex = re.compile(
+    r"\b(" + "|".join(map(re.escape, thanks_phrases)) + r")\b",
+    re.I,
+)
+
+# ⑤ regex for goodbye words inside longer sentences (whole-word match)
+_goodbye_words_regex = re.compile(
+    r"\b(" + "|".join(map(re.escape, goodbye_words)) + r")\b",
+    re.I,
+)
 
 
 # Configure logging
@@ -283,7 +317,7 @@ class SupervisorAgent:
             return True
 
     # ── greetings ──────────────────────────────────────────────────────────
-        if _greeting_regex.search(q):
+        if _greetings_regex.search(q):
             logger.debug("Greeting detected")
             return True
 
@@ -294,11 +328,6 @@ class SupervisorAgent:
 
         if _phrase_goodbyes_regex.search(q):
             logger.debug("Phrase goodbye detected")
-            return True
-
-    # whole-word goodbye words (e.g., “bye everyone”)
-        if _goodbye_words_regex.search(q):
-            logger.debug("Goodbye word detected")
             return True
 
     # ── thanks ────────────────────────────────────────────────────────────

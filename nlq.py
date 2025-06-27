@@ -32,72 +32,72 @@ model = genai.GenerativeModel(MODEL_NAME)
 SCHEMA_INFO = """
 Database Schema Details (Note: Column names are case-sensitive):
 
-Table: batch
-  - id: Unique ID of the batch (primary key)
-  - distributor: Name of the distributor from whom the batch was purchased
-  - purchase_date: Date when the batch was purchased
-  - purchased_quantity: Total quantity purchased in the batch
-  - remaining: Quantity still remaining in stock
-  - purchace_price: Purchase price per unit from distributor
-  - selling_price: Selling price per unit to customers
-  - commission: Commission per unit if any
-  - expiry: Expiry date of the product batch
+Table Name: batch
+ - id (bigint): Unique ID of the batch (primary key)
+ - distributor (text): Name of the distributor
+ - purchase_date (date): Date when the batch was purchased
+ - purchased_quantity (bigint): Quantity purchased in this batch
+ - remaining (bigint): Quantity still remaining in stock
+ - purchace_price (double precision): Purchase price per unit
+ - selling_price (bigint): Selling price per unit
+ - commission (double precision): Commission per unit
+ - expiry (date): Expiry date of the product batch
 
-Table: customers
-  - id: Unique ID of the customer (primary key)
-  - name: Name of the customer
-  - mobile_no: Customer's mobile number
-  - address: Customer’s address
-  - age: Age of the customer
-  - gender: Gender of the customer
-  - avg_visit: Average number of visits per month
-  - avg_spending: Average spending per visit
-  - loyalty_points: Loyalty points accumulated by the customer
+Table Name: customers
+ - id (bigint): Unique ID of the customer (primary key) 
+ - name (text): Customer's name
+ - mobile_no (bigint): Mobile number
+ - address (text): Address
+ - age (bigint): Age of the customer
+ - gender (text): Gender of the customer
+ - avg_visit (double precision): Average visits per month
+ - avg_spending (double precision): Average spending per visit
+ - loyalty_points (bigint): Accumulated loyalty points
 
-Table: employees
-  - id: Unique ID of the employee (primary key)
-  - name: Name of the employee
-  - age: Age of the employee
-  - gender: Gender of the employee
-  - mobile_no: Employee's mobile number
-  - address: Address of the employee
-  - shift: Work shift of the employee (e.g., morning, evening)
-  - blood_group: Blood group of the employee
+Table Name: employees
+ - id (bigint): Unique ID of the employee (primary key)
+ - name (text): Name of the employee
+ - age (bigint): Age of the employee
+ - gender (text): Gender
+ - mobile_no (bigint): Mobile number
+ - address (text): Address
+ - shift (text): Work shift (e.g., morning, evening)
+ - blood_group (text): Blood group of the employee
 
-Table: products         
-  - id: Unique ID of the product (primary key)
-  - product_name: Name of the product
-  - category: Category the product belongs to (e.g., snacks, beverages)
-  - brand: Brand of the product
-  - unit: Unit of measurement (e.g., piece, kg)
-  - batch_number: ID of the batch the product came from (foreign key to batch)
-  - max_stocking_quantity: Maximum stock level allowed
-  - reorder_level: Minimum stock level before reordering
+Table Name: products
+ - id (bigint): Unique ID of the product (primary key)
+ - product_name (text): Name of the product
+ - category (text): Product category (e.g., snacks, drinks)
+ - brand (text): Brand of the product
+ - unit (text): Unit of measure (e.g., piece, kg)
+ - batch_number (bigint): Batch ID the product belongs to (foreign key)
+ - max_stocking_quantity (bigint): Maximum stock limit
+ - reorder_level (bigint): Stock level at which to reorder
 
-Table: transactions
-  - id: Unique ID of the transaction (primary key)
-  - order_id: Unique order number for the transaction
-  - customer_id: ID of the customer involved (foreign key)
-  - employee_id: ID of the employee who handled the transaction (foreign key)
-  - transaction_amount: Total transaction value
-  - payment_method: Method of payment (e.g., cash, UPI)
-  - date_time: Date and time of the transaction
+Table Name: transactions
+ - id (bigint): Unique ID of the transaction (primary key)
+ - order_id (bigint): Unique order number (used in Orders table)
+ - customer_id (bigint): Customer ID (foreign key)
+ - employee_id (bigint): Employee ID (foreign key)
+ - transaction_amount (double precision): Total bill amount
+ - payment_method (text): Mode of payment (e.g., cash, UPI)
+ - date_time (text): Date and time of transaction
 
-Table: orders
-  - id: Unique ID of the order entry (primary key)
-  - order_id: Order number referencing the transaction (foreign key)
-  - product_id: ID of the product purchased (foreign key)
-  - quantity: Quantity of the product purchased
-  - price: Price per unit
-  - amount: Total amount before tax
-  - igst_percentage: IGST percentage applicable
-  - igst_amount: IGST amount calculated
-  - cgst_percentage: CGST percentage applicable
-  - cgst_amount: CGST amount calculated
-  - sgst_percentage: SGST percentage applicable
-  - sgst_amount: SGST amount calculated
-  - total_gst: Total GST amount (IGST + CGST + SGST)
-  - final_amount: Final amount after adding tax
+Table Name: orders
+ - id (bigint): Unique ID of the order entry (primary key)
+ - order_id (bigint): Order number (foreign key to transactions.order_id)
+ - product_id (bigint): Product ID (foreign key)
+ - quantity (bigint): Quantity purchased
+ - price (bigint): Price per unit
+ - amount (bigint): Amount before tax
+ - igst_percentage (double precision): IGST percentage
+ - igst_amount (double precision): IGST value
+ - cgst_percentage (double precision): CGST percentage
+ - cgst_amount (double precision): CGST value
+ - sgst_percentage (double precision): SGST percentage
+ - sgst_amount (double precision): SGST value
+ - total_gst (double precision): Total GST amount
+ - final_amount (double precision): Total payable amount after tax
 
 Relationships:
  - transactions."employee_id" → employees."id"
@@ -114,6 +114,8 @@ Query Guidelines:
 4. Use table aliases for better readability (e.g., 'c' for customers, 'e' for employees, 't' for transactions)
 5. The Transactions table has a one-to-many relationship with the Orders table, meaning each transaction can have multiple associated orders.
 6. For GST info join transactions and orders table to get the GST details.
+7. Only use column names, table names and relations mentioned in the schema.
+8. While matching columns, be mindful of the datatype of the columns.
 
 Important Notes:
 1. Always use double quotes around column and table names to preserve case
