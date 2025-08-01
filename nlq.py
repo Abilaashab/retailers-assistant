@@ -102,7 +102,7 @@ Table Name: orders
 Relationships:
  - transactions."employee_id" → employees."id"
  - transactions."customer_id" → customers."id"
- - transactions."order_id" → orders."order_id"
+ - transactions."order_id" → orders."order_id"(one-to-many)
  - orders."product_id" → products."id"
  - products."batch_number" → batch."id"
 
@@ -170,22 +170,20 @@ def generate_sql_query(natural_language_query: str) -> Dict[str, Any]:
         Current date: {current_date} {current_time}
         Current year: {current_year}
 
-        Important Notes:
-        1. For sales-related queries, join the transactions and orders tables to get complete sales data
-        2. For date filtering, use EXTRACT(MONTH FROM t.date_time) = 1 for January, EXTRACT(YEAR FROM t.date_time) = {current_year} for current year
-        3. For monetary values, use the SUM() function to calculate totals from the orders.final_amount column
-        4. Always include the DATE() function when filtering by date
-        5. When a date is mentioned without a year, assume the current year ({current_year}) unless specified otherwise
-        6. For monthly sales, group by month using DATE_TRUNC('month', t.date_time)
-        7. Return only valid PostgreSQL SQL
-        
-        Example for January sales this year:
-        SELECT SUM(o.final_amount) as total_sales
-        FROM transactions t
-        JOIN orders o ON t.id = o.transaction_id
-        WHERE EXTRACT(MONTH FROM t.date_time) = 1 
-          AND EXTRACT(YEAR FROM t.date_time) = EXTRACT(YEAR FROM CURRENT_DATE)
-        
+        Important SQL Rules:
+        1. For UNION and UNION ALL statements, ensure all SELECT statements have the same number of columns, and columns in the same position must have the same data type (cast to text if needed)
+        2. When combining different queries with UNION ALL, use NULL placeholders for missing columns to match the maximum number of columns
+        3. For sales-related queries, join the transactions and orders tables to get complete sales data
+        4. For date filtering, use EXTRACT(MONTH FROM t.date_time) = 1 for January, EXTRACT(YEAR FROM t.date_time) = {current_year} for current year
+        5. For monetary values, use the SUM() function to calculate totals from the orders.final_amount column
+        6. Always include the DATE() function when filtering by date
+        7. When a date is mentioned without a year, assume the current year ({current_year}) unless specified otherwise
+        8. For monthly sales, group by month using DATE_TRUNC('month', t.date_time)
+        9. Return only valid PostgreSQL SQL
+        10. When using UNION ALL, ensure all subqueries have the same number of columns with compatible data types
+        11. If using LIMIT with UNION ALL, wrap each subquery in parentheses and put the LIMIT inside the parentheses
+        12. Never use LIMIT after a UNION ALL without wrapping the subquery in parentheses
+    
         User query: "{natural_language_query}"
         
         Respond with a JSON object containing:
@@ -382,12 +380,17 @@ def execute_nl_query(natural_language_query: str) -> Dict[str, Any]:
                 print("[DEBUG] Query executed successfully. Result data:")
                 print(json.dumps(results, indent=2, ensure_ascii=False, cls=DecimalEncoder))
             
+            # Wrap results for analytics agent compatibility
+            wrapped_results = [{
+                "metric": "products_about_to_expire",
+                "data": results
+            }]
             return {
                 "success": True,
                 "sql": sql_query,
                 "assumptions": sql_result.get("assumptions", []),
                 "notes": sql_result.get("notes", "Query executed successfully"),
-                "data": results
+                "data": wrapped_results
             }
             
         except Exception as e:
@@ -465,12 +468,17 @@ def execute_nl_query(natural_language_query: str) -> Dict[str, Any]:
             print("[DEBUG] Query executed successfully. Result data:")
             print(json.dumps(results, indent=2, ensure_ascii=False, cls=DecimalEncoder))
         
+        # Wrap results for analytics agent compatibility
+        wrapped_results = [{
+            "metric": "products_about_to_expire",
+            "data": results
+        }]
         return {
             "success": True,
             "sql": sql_query,
             "assumptions": sql_result.get("assumptions", []),
             "notes": sql_result.get("notes", "Query executed successfully"),
-            "data": results
+            "data": wrapped_results
         }
         
     except Exception as e:
@@ -519,6 +527,42 @@ def print_query_result(result):
             print("No data returned")
     else:
         print("\nError:", result.get("error", "Unknown error"))
+
+def summarize_metrics(metrics_data: dict, user_question: str) -> str:
+    """
+    Generate a summary and business recommendations from analytics metrics using Gemini LLM.
+    Args:
+        metrics_data (dict): Dictionary containing metrics and sample data
+        user_question (str): The original user question
+    Returns:
+        str: Summary and recommendations
+    """
+    import os
+    try:
+        from dotenv import load_dotenv
+        import google.generativeai as genai
+        load_dotenv()
+        api_key = os.getenv("GOOGLE_API_KEY")
+        if not api_key:
+            return "[Error: GOOGLE_API_KEY not found in environment variables]"
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        prompt_data = json.dumps(metrics_data, indent=2, default=str)
+        prompt = (
+            f"Based on these analytics metrics for '{user_question}', "
+            f"summarize the key findings and provide 3 actionable business recommendations. "
+            f"Focus on insights that can help improve the business. Here's the data:\n{prompt_data}"
+        )
+        response = model.generate_content(
+            prompt,
+            generation_config={"max_output_tokens": 512, "temperature": 0.3},
+            request_options={"timeout": 60}
+        )
+        if hasattr(response, 'text'):
+            return response.text.strip()
+        return str(response)
+    except Exception as e:
+        return f"[Error generating summary: {e}]"
     print("="*80 + "\n")
 
 def test_specific_query(query):

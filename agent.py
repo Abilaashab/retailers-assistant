@@ -408,8 +408,7 @@ class SupervisorAgent:
         db_words = [
             "income", "revenue", "sales", "profit", "expense", "transaction",
             "average", "financial", "customers", "employees", "product",
-            "order", "sell", "stock", "buy", "remaining", "quantity",
-            "shampoo", "ml", "180ml"
+            "order", "sell", "stock", "buy", "remaining", "quantity", "brand"
         ]
         
         # Check for analytics queries
