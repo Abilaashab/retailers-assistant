@@ -5,7 +5,6 @@ import { usePathname } from 'next/navigation';
 
 const navigation = [
   { name: 'Home', href: '/' },
-  { name: 'TTS Stream', href: '/tts-stream' },
   // Add more navigation items here
 ];
 
