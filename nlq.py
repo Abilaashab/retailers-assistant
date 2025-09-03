@@ -27,42 +27,79 @@ model = genai.GenerativeModel(MODEL_NAME)
 # Database schema information with exact column cases
 SCHEMA_INFO = """
 Database Schema Details (Note: Column names are case-sensitive):
+Table Name: batch
+- id (bigint): Unique ID of the batch (primary key)
+- distributor (text): Name of the distributor
+- purchase_date (date): Date when the batch was purchased
+- purchased_quantity (bigint): Quantity purchased in this batch
+- remaining (bigint): Quantity still remaining in stock
+- purchace_price (double precision): Purchase price per unit
+- selling_price (bigint): Selling price per unit
+- commission (double precision): Commission per unit
+- expiry (date): Expiry date of the product batch
 
-1. TABLE: customer_info
-   Description: Stores information about customers.
-   Columns (use exact case as shown):
-   - "CustomerID" (bigint, PRIMARY KEY): Unique identifier for each customer
-   - "Name" (text): Name of the customer
-   - "Gender" (text): Gender of the customer
-   - "Age" (bigint): Age of the customer
-   - "LoyaltyCard" (text): Loyalty card information
-   - "AvgSpending" (double precision): Average spending of the customer
-   - "VisitFrequency" (bigint): Frequency of visits by the customer
+Table Name: customers
+- id (bigint): Unique ID of the customer (primary key)
+- name (text): Customer's name
+- mobile_no (bigint): Mobile number
+- address (text): Address
+- age (bigint): Age of the customer
+- gender (text): Gender of the customer
+- avg_visit (double precision): Average visits per month
+- avg_spending (double precision): Average spending per visit
+- loyalty_points (bigint): Accumulated loyalty points
 
-2. TABLE: employee_performance
-   Description: Tracks the performance of employees.
-   Columns (use exact case as shown):
-   - "EmployeeID" (bigint, PRIMARY KEY): Unique identifier for each employee
-   - "Name" (text): Name of the employee
-   - "SalesMade" (bigint): Number of sales made by the employee
-   - "AvgTransactionValue" (double precision): Average transaction value
+Table Name: employees
+- id (bigint): Unique ID of the employee (primary key)
+- name (text): Name of the employee
+- age (bigint): Age of the employee
+- gender (text): Gender
+- mobile_no (bigint): Mobile number
+- address (text): Address
+- shift (text): Work shift (e.g., morning, evening)
+- blood_group (text): Blood group of the employee
 
-3. TABLE: sales_transactions
-   Description: Records sales transactions.
-   Columns (use exact case as shown):
-   - "TransactionID" (bigint, PRIMARY KEY): Unique identifier for each transaction
-   - "DateTime" (timestamp with time zone): Date and time of the transaction
-   - "Product" (text): Product sold
-   - "Quantity" (bigint): Quantity of the product sold
-   - "Price" (double precision): Price of the product
-   - "PaymentMethod" (text): Method of payment used
-   - "DiscountApplied" (text): Any discount applied
-   - "EmployeeID" (bigint, FOREIGN KEY): References employee_performance("EmployeeID")
-   - "CustomerID" (bigint, FOREIGN KEY): References customer_info("CustomerID")
+Table Name: products
+- id (bigint): Unique ID of the product (primary key)
+- product_name (text): Name of the product
+- category (text): Product category (e.g., snacks, drinks)
+- brand (text): Brand of the product
+- unit (text): Unit of measure (e.g., piece, kg)
+- batch_number (bigint): Batch ID the product belongs to (foreign key)
+- max_stocking_quantity (bigint): Maximum stock limit
+- reorder_level (bigint): Stock level at which to reorder
+
+Table Name: transactions
+- id (bigint): Unique ID of the transaction (primary key)
+- order_id (bigint): Unique order number (used in Orders table)
+- customer_id (bigint): Customer ID (foreign key)
+- employee_id (bigint): Employee ID (foreign key)
+- transaction_amount (double precision): Total bill amount
+- payment_method (text): Mode of payment (e.g., cash, UPI)
+- date_time (text): Date and time of transaction
+
+Table Name: orders
+- id (bigint): Unique ID of the order entry (primary key)
+- order_id (bigint): Order number (foreign key to transactions.order_id)
+- product_id (bigint): Product ID (foreign key)
+- quantity (bigint): Quantity purchased
+- price (bigint): Price per unit
+- amount (bigint): Amount before tax
+- igst_percentage (double precision): IGST percentage
+- igst_amount (double precision): IGST value
+- cgst_percentage (double precision): CGST percentage
+- cgst_amount (double precision): CGST value
+- sgst_percentage (double precision): SGST percentage
+- sgst_amount (double precision): SGST value
+- total_gst (double precision): Total GST amount
+- final_amount (double precision): Total payable amount after tax
 
 Relationships:
-- sales_transactions."EmployeeID" → employee_performance."EmployeeID"
-- sales_transactions."CustomerID" → customer_info."CustomerID"
+- transactions."employee_id" → employees."id"
+- transactions."customer_id" → customers."id"
+- transactions."order_id" → orders."order_id"(one-to-many)
+- orders."product_id" → products."id"
+- products."batch_number" → batch."id"
 
 Query Guidelines:
 1. Always join to customer_info to get customer names when CustomerID is involved
