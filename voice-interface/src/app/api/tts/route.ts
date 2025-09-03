@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { SARVAM_CONFIG, toBcp47Code } from '@/config';
 
 // Function to clean text for TTS by removing emojis and certain special characters
-function cleanTextForTTS(text: string): string {
+export function cleanTextForTTS(text: string): string {
   // Remove emojis and other special characters but keep basic punctuation
   return text
     // Remove emojis
