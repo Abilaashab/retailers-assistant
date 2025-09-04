@@ -22,7 +22,7 @@ class HoroscopeAgent:
     BASE_URL = "https://horoscope-app-api.vercel.app/api/v1/get-horoscope/daily"
     
     def __init__(self):
-        self.default_sign = os.getenv("DEFAULT_USER_SIGN", "Aries").capitalize()
+        self.default_sign = os.getenv("DEFAULT_USER_SIGN", "Gemini").capitalize()
         self.valid_signs = [
             'Aries', 'Taurus', 'Gemini', 'Cancer', 'Leo', 'Virgo',
             'Libra', 'Scorpio', 'Sagittarius', 'Capricorn', 'Aquarius', 'Pisces'
