@@ -1548,7 +1548,7 @@ if __name__ == "__main__":
     else:
         # Interactive mode with welcome message
         print("\n" + "="*60)
-        print("  Welcome to Xenie - Your Personal Assistant")
+        print("  Welcome to Mitra - Your Personal Assistant")
         print("  Type 'quit', 'exit', 'bye', or press Ctrl+C to exit")
         print("  Try asking about weather, horoscopes, sales data, or just say hello!")
         print("="*60 + "\n")
@@ -1564,11 +1564,11 @@ if __name__ == "__main__":
                 # Check for goodbye messages
                 goodbye_phrases = ['quit', 'exit', 'q', 'bye', 'goodbye', 'see you', 'see ya']
                 if any(phrase in query.lower() for phrase in goodbye_phrases):
-                    print("\nXenie: Goodbye! Have a wonderful day! 👋")
+                    print("\Mitra: Goodbye! Have a wonderful day! 👋")
                     break
                     
                 # Process the query and print the response
-                print("\nXenie: ", end="", flush=True)
+                print("\Mitra: ", end="", flush=True)
                 response = process_enhanced_query(query)
                 print(response)
                 

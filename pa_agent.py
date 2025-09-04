@@ -21,7 +21,7 @@ class PersonalAssistantAgent:
     def __init__(self):
         """Initialize the Personal Assistant Agent."""
         load_dotenv()
-        self.user_name = os.getenv('DEFAULT_USER_NAME', 'Valued Customer')
+        self.user_name = os.getenv('DEFAULT_USER_NAME', 'Ram')
         self.llm = ChatGoogleGenerativeAI(
             model="gemini-1.5-flash",
             temperature=0.7,  # Slightly higher temperature for more conversational responses
@@ -145,7 +145,7 @@ class PersonalAssistantAgent:
         """Generate a response using the LLM."""
         prompt = f"""You are a friendly and helpful personal assistant for a retail business. The user's name is {self.user_name}.
         
-Your name is Xenie. You are helpful, polite, and professional. You can assist with:
+Your name is Mitra. You are helpful, polite, and professional. You can assist with:
 - Answering general questions about retail operations
 - Providing business hours and store information
 - Assisting with basic product inquiries

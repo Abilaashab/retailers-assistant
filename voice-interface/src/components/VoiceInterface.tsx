@@ -3,6 +3,75 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import SpeechRecognition, { useSpeechRecognition } from 'react-speech-recognition';
 import { toBcp47Code, SARVAM_CONFIG, VOICES, getDefaultVoiceForLanguage } from '@/config';
+import styles from './VoiceInterface.module.css';
+
+// Icons
+const MicrophoneIcon = ({ isListening }: { isListening: boolean }) => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    width="24"
+    height="24"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    {isListening ? (
+      <>
+        <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+        <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+        <line x1="12" y1="19" x2="12" y2="23" />
+        <line x1="8" y1="23" x2="16" y2="23" />
+      </>
+    ) : (
+      <>
+        <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+        <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+        <line x1="12" y1="19" x2="12" y2="23" />
+        <line x1="8" y1="23" x2="16" y2="23" />
+      </>
+    )}
+  </svg>
+);
+
+const SendIcon = () => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    width="24"
+    height="24"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <line x1="22" y1="2" x2="11" y2="13" />
+    <polygon points="22 2 15 22 11 13 2 9 22 2" />
+  </svg>
+);
+
+const MicOffIcon = () => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    width="24"
+    height="24"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <line x1="1" y1="1" x2="23" y2="23" />
+    <path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6" />
+    <path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23" />
+    <line x1="12" y1="19" x2="12" y2="23" />
+    <line x1="8" y1="23" x2="16" y2="23" />
+  </svg>
+);
 
 interface Message {
   role: 'user' | 'assistant';
@@ -411,175 +480,124 @@ export default function VoiceInterface() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-white p-4 md:p-6">
-      <div className="max-w-4xl mx-auto">
-        <h1 className="text-4xl font-bold text-center text-gray-900 mb-10">Voice Assistant</h1>
-        
-        {/* Language and Voice Selection */}
-        <div className="flex flex-col sm:flex-row gap-4 mb-8 justify-center">
-          <div className="flex-1 max-w-md">
-            <label htmlFor="language" className="sr-only">Select Language</label>
-            <select
-              id="language"
-              value={selectedLanguage}
-              onChange={(e) => setSelectedLanguage(e.target.value)}
-              className="w-full px-4 py-3 border border-gray-200 rounded-full shadow-sm focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent text-gray-900 bg-white hover:border-gray-300 transition-all duration-200"
-              disabled={isListening || isProcessing}
-            >
-              {LANGUAGES.map((lang) => (
-                <option key={lang.code} value={toBcp47Code(lang.code)}>
-                  {lang.name}
-                </option>
-              ))}
-            </select>
-          </div>
-          
-          <div className="flex-1 max-w-md">
-            <label htmlFor="voice" className="sr-only">Select Voice</label>
-            <select
-              id="voice"
-              value={selectedVoice}
-              onChange={(e) => {
-                console.log('Selected voice changed to:', e.target.value);
-                setSelectedVoice(e.target.value);
-              }}
-              className="w-full px-4 py-3 border border-gray-200 rounded-full shadow-sm focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent text-gray-900 bg-white hover:border-gray-300 transition-all duration-200"
-              disabled={isProcessing}
-            >
-              <optgroup label="Available Voices">
-                {availableVoices.map((voice) => (
-                  <option key={voice.id} value={voice.id}>
-                    {voice.name} ({voice.gender.charAt(0).toUpperCase() + voice.gender.slice(1)})
-                  </option>
-                ))}
-              </optgroup>
-            </select>
-          </div>
+    <div className={styles.container}>
+      <header className={styles.header}>
+        <h1 className={styles.title}>Voice Assistant</h1>
+        <div className={styles.controls}>
+          <select
+            value={selectedLanguage}
+            onChange={(e) => setSelectedLanguage(e.target.value)}
+            className={styles.select}
+            aria-label="Select language"
+          >
+            {LANGUAGES.map((lang) => (
+              <option key={lang.code} value={toBcp47Code(lang.code)}>
+                {lang.name}
+              </option>
+            ))}
+          </select>
+          <select
+            value={selectedVoice}
+            onChange={(e) => setSelectedVoice(e.target.value)}
+            className={styles.select}
+            disabled={availableVoices.length === 0}
+            aria-label="Select voice"
+          >
+            {availableVoices.map((voice) => (
+              <option key={voice.id} value={voice.id}>
+                {voice.name} ({voice.gender})
+              </option>
+            ))}
+          </select>
         </div>
-        
-        {/* Conversation */}
-        <div className="bg-white rounded-2xl shadow-lg p-6 mb-6 h-[50vh] overflow-y-auto bg-opacity-80 backdrop-blur-sm">
-          {conversation.length === 0 ? (
-            <div className="h-full flex items-center justify-center text-gray-400">
-              Start a conversation by clicking the microphone or typing a message
-            </div>
-          ) : (
-            <div className="space-y-4">
-              {conversation.map((message, index) => (
-                <div 
-                  key={index}
-                  className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                >
-                  <div 
-                    className={`max-w-[85%] rounded-2xl p-4 text-base ${
-                      message.role === 'user'
-                        ? 'bg-purple-600 text-white rounded-br-none'
-                        : message.isError
-                        ? 'bg-red-50 text-red-700 rounded-bl-none border border-red-100'
-                        : 'bg-gray-50 text-gray-800 rounded-bl-none border border-gray-100'
-                    }`}
-                  >
-                    <div className="text-xs font-medium mb-1.5 opacity-80">
-                      {message.role === 'user' ? 'You' : 'Assistant'}
-                    </div>
-                    
-                    {message.role === 'user' && (
-                      <>
-                        <div className="whitespace-pre-wrap mb-2">
-                          {message.originalContent || message.content}
-                        </div>
-                        
-                        {message.translatedContent && message.translatedContent !== (message.originalContent || message.content) && (
-                          <div className="text-sm italic border-t border-white/20 pt-2 mt-2 text-white/80">
-                            <span className="opacity-70">(Translated) </span>
-                            {message.translatedContent}
-                          </div>
-                        )}
-                      </>
-                    )}
-                    
-                    {message.role === 'assistant' && (
-                      <div 
-                        className="whitespace-pre-wrap"
-                        dangerouslySetInnerHTML={{
-                          __html: message.content
-                            .replace(/📰/g, '<span class="text-xl">📰</span>')
-                            .replace(/\*([^*]+)\*/g, '<span class="font-semibold">$1</span>')
-                            .replace(/\[(.*?)\]\((.*?)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="text-purple-600 hover:text-purple-700 underline">$1</a>')
-                            .replace(/\n/g, '<br/>')
-                        }}
-                      />
-                    )}
-                  </div>
-                </div>
-              ))}
-              
-              {isProcessing && (
-                <div className="flex justify-start">
-                  <div className="bg-gray-50 text-gray-800 rounded-2xl rounded-bl-none p-4 max-w-[85%] border border-gray-100">
-                    <div className="flex space-x-2">
-                      <div className="w-2 h-2 bg-purple-400 rounded-full animate-bounce"></div>
-                      <div className="w-2 h-2 bg-purple-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
-                      <div className="w-2 h-2 bg-purple-400 rounded-full animate-bounce" style={{ animationDelay: '0.4s' }}></div>
-                    </div>
-                  </div>
-                </div>
+      </header>
+
+      <div className={styles.chatContainer}>
+        {conversation.length === 0 ? (
+          <div className={styles.emptyState}>
+            <button
+              onClick={toggleListening}
+              disabled={!browserSupportsSpeechRecognition || !isMicrophoneAvailable}
+              className={`${styles.microphoneButton} ${isListening ? styles.listening : ''}`}
+              aria-label={isListening ? 'Stop listening' : 'Start speaking'}
+            >
+              {!browserSupportsSpeechRecognition || !isMicrophoneAvailable ? (
+                <MicOffIcon />
+              ) : (
+                <MicrophoneIcon isListening={isListening} />
               )}
-            </div>
-          )}
-        </div>
-        
-        {/* Input Area */}
-        <div className="bg-white rounded-2xl shadow-lg p-4 bg-opacity-80 backdrop-blur-sm">
-          <form onSubmit={handleTextSubmit} className="relative">
+            </button>
+            <p className={styles.emptyText}>
+              {!browserSupportsSpeechRecognition
+                ? "Your browser doesn't support speech recognition."
+                : !isMicrophoneAvailable
+                ? 'Microphone access is required for voice input.'
+                : 'Start a conversation by clicking the microphone or typing a message'}
+            </p>
+          </div>
+        ) : (
+          <div className={styles.messages}>
+            {conversation.map((message, index) => (
+              <div
+                key={index}
+                className={`${styles.message} ${
+                  message.role === 'user' ? styles.userMessage : styles.assistantMessage
+                }`}
+              >
+                <div className="whitespace-pre-wrap">
+                  {message.content}
+                  {message.originalContent && message.originalContent !== message.content && (
+                    <>
+                      <hr className="my-2 border-t border-opacity-20" />
+                      <span className="text-xs opacity-70">{message.originalContent}</span>
+                    </>
+                  )}
+                </div>
+              </div>
+            ))}
+
+            {isProcessing && (
+              <div className={styles.typingIndicator}>
+                <div className={styles.typingDot}></div>
+                <div className={styles.typingDot}></div>
+                <div className={styles.typingDot}></div>
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className={styles.inputContainer}>
+          <form onSubmit={handleTextSubmit} className={styles.inputWrapper}>
             <input
               type="text"
               name="textInput"
               placeholder="Type your message..."
-              className="w-full pr-24 pl-5 py-4 border border-gray-200 rounded-full focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent text-gray-900 bg-white transition-all duration-200"
+              className={styles.input}
               disabled={isProcessing || isListening || isRecording}
+              aria-label="Type your message"
             />
             <button
               type="submit"
-              className="absolute right-16 top-1/2 -translate-y-1/2 px-4 py-1.5 bg-purple-600 text-white rounded-full text-sm font-medium hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500 disabled:opacity-50 transition-colors"
-              disabled={isProcessing || isListening || isRecording}
+              className={styles.sendButton}
+              disabled={isProcessing}
+              aria-label="Send message"
             >
-              Send
+              <SendIcon />
             </button>
-          </form>
-          
-          <div className="mt-6 flex justify-center">
             <button
               type="button"
               onClick={toggleListening}
-              disabled={!isMicrophoneAvailable || isProcessing || isRecording}
-              className={`flex items-center justify-center w-16 h-16 rounded-full ${
-                isListening 
-                  ? 'bg-red-500 shadow-lg shadow-red-200 transform scale-110' 
-                  : 'bg-gradient-to-r from-purple-600 to-indigo-600 hover:shadow-lg hover:shadow-purple-200 hover:scale-105'
-              } text-white focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500 transition-all duration-300`}
-              aria-label={isListening ? 'Stop listening' : 'Start listening'}
+              disabled={!browserSupportsSpeechRecognition || !isMicrophoneAvailable || isProcessing}
+              className={`${styles.micButton} ${isListening ? styles.listening : ''}`}
+              aria-label={isListening ? 'Stop listening' : 'Start voice input'}
             >
-              {isListening ? (
-                <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
+              {!browserSupportsSpeechRecognition || !isMicrophoneAvailable ? (
+                <MicOffIcon />
               ) : (
-                <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-                </svg>
+                <MicrophoneIcon isListening={isListening} />
               )}
             </button>
-            
-            {!isMicrophoneAvailable && (
-              <p className="ml-3 text-sm text-red-600 flex items-center">
-                <svg className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                </svg>
-                Microphone access required
-              </p>
-            )}
-          </div>
+          </form>
         </div>
       </div>
     </div>
