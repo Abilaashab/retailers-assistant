@@ -411,21 +411,19 @@ export default function VoiceInterface() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 p-4">
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-white p-4 md:p-6">
       <div className="max-w-4xl mx-auto">
-        <h1 className="text-3xl font-bold text-center text-gray-900 mb-8">Voice Assistant</h1>
+        <h1 className="text-4xl font-bold text-center text-gray-900 mb-10">Voice Assistant</h1>
         
         {/* Language and Voice Selection */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-          <div>
-            <label htmlFor="language" className="block text-sm font-medium text-gray-700 mb-1">
-              Select Language
-            </label>
+        <div className="flex flex-col sm:flex-row gap-4 mb-8 justify-center">
+          <div className="flex-1 max-w-md">
+            <label htmlFor="language" className="sr-only">Select Language</label>
             <select
               id="language"
               value={selectedLanguage}
               onChange={(e) => setSelectedLanguage(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 text-gray-900 bg-white"
+              className="w-full px-4 py-3 border border-gray-200 rounded-full shadow-sm focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent text-gray-900 bg-white hover:border-gray-300 transition-all duration-200"
               disabled={isListening || isProcessing}
             >
               {LANGUAGES.map((lang) => (
@@ -436,10 +434,8 @@ export default function VoiceInterface() {
             </select>
           </div>
           
-          <div>
-            <label htmlFor="voice" className="block text-sm font-medium text-gray-700 mb-1">
-              Select Voice
-            </label>
+          <div className="flex-1 max-w-md">
+            <label htmlFor="voice" className="sr-only">Select Voice</label>
             <select
               id="voice"
               value={selectedVoice}
@@ -447,7 +443,7 @@ export default function VoiceInterface() {
                 console.log('Selected voice changed to:', e.target.value);
                 setSelectedVoice(e.target.value);
               }}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 text-gray-900 bg-white"
+              className="w-full px-4 py-3 border border-gray-200 rounded-full shadow-sm focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent text-gray-900 bg-white hover:border-gray-300 transition-all duration-200"
               disabled={isProcessing}
             >
               <optgroup label="Available Voices">
@@ -462,9 +458,9 @@ export default function VoiceInterface() {
         </div>
         
         {/* Conversation */}
-        <div className="bg-white rounded-lg shadow-lg p-6 mb-6 h-[50vh] overflow-y-auto">
+        <div className="bg-white rounded-2xl shadow-lg p-6 mb-6 h-[50vh] overflow-y-auto bg-opacity-80 backdrop-blur-sm">
           {conversation.length === 0 ? (
-            <div className="h-full flex items-center justify-center text-gray-500">
+            <div className="h-full flex items-center justify-center text-gray-400">
               Start a conversation by clicking the microphone or typing a message
             </div>
           ) : (
@@ -475,19 +471,18 @@ export default function VoiceInterface() {
                   className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
                 >
                   <div 
-                    className={`max-w-[80%] rounded-lg p-4 ${
+                    className={`max-w-[85%] rounded-2xl p-4 text-base ${
                       message.role === 'user'
-                        ? 'bg-indigo-600 text-white rounded-br-none'
+                        ? 'bg-purple-600 text-white rounded-br-none'
                         : message.isError
-                        ? 'bg-red-100 text-red-800 rounded-bl-none'
-                        : 'bg-gray-100 text-gray-800 rounded-bl-none'
+                        ? 'bg-red-50 text-red-700 rounded-bl-none border border-red-100'
+                        : 'bg-gray-50 text-gray-800 rounded-bl-none border border-gray-100'
                     }`}
                   >
-                    <div className="text-sm font-medium mb-1">
-                      {message.role === 'user' ? 'You' : 'Xenie'}
+                    <div className="text-xs font-medium mb-1.5 opacity-80">
+                      {message.role === 'user' ? 'You' : 'Assistant'}
                     </div>
                     
-                    {/* For user messages, show original text first, then translated text */}
                     {message.role === 'user' && (
                       <>
                         <div className="whitespace-pre-wrap mb-2">
@@ -495,7 +490,7 @@ export default function VoiceInterface() {
                         </div>
                         
                         {message.translatedContent && message.translatedContent !== (message.originalContent || message.content) && (
-                          <div className="text-sm italic border-t border-white/20 pt-2 mt-2">
+                          <div className="text-sm italic border-t border-white/20 pt-2 mt-2 text-white/80">
                             <span className="opacity-70">(Translated) </span>
                             {message.translatedContent}
                           </div>
@@ -503,15 +498,14 @@ export default function VoiceInterface() {
                       </>
                     )}
                     
-                    {/* For assistant messages, just show the content */}
                     {message.role === 'assistant' && (
                       <div 
                         className="whitespace-pre-wrap"
                         dangerouslySetInnerHTML={{
                           __html: message.content
                             .replace(/📰/g, '<span class="text-xl">📰</span>')
-                            .replace(/\*([^*]+)\*/g, '<span class="font-bold">$1</span>')
-                            .replace(/\[(.*?)\]\((.*?)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="text-blue-400 hover:text-blue-300 underline">$1</a>')
+                            .replace(/\*([^*]+)\*/g, '<span class="font-semibold">$1</span>')
+                            .replace(/\[(.*?)\]\((.*?)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="text-purple-600 hover:text-purple-700 underline">$1</a>')
                             .replace(/\n/g, '<br/>')
                         }}
                       />
@@ -522,11 +516,11 @@ export default function VoiceInterface() {
               
               {isProcessing && (
                 <div className="flex justify-start">
-                  <div className="bg-gray-100 text-gray-800 rounded-lg rounded-bl-none p-4 max-w-[80%]">
+                  <div className="bg-gray-50 text-gray-800 rounded-2xl rounded-bl-none p-4 max-w-[85%] border border-gray-100">
                     <div className="flex space-x-2">
-                      <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
-                      <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
-                      <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.4s' }}></div>
+                      <div className="w-2 h-2 bg-purple-400 rounded-full animate-bounce"></div>
+                      <div className="w-2 h-2 bg-purple-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+                      <div className="w-2 h-2 bg-purple-400 rounded-full animate-bounce" style={{ animationDelay: '0.4s' }}></div>
                     </div>
                   </div>
                 </div>
@@ -536,32 +530,34 @@ export default function VoiceInterface() {
         </div>
         
         {/* Input Area */}
-        <div className="bg-white rounded-lg shadow-md p-4">
-          <form onSubmit={handleTextSubmit} className="flex space-x-2">
+        <div className="bg-white rounded-2xl shadow-lg p-4 bg-opacity-80 backdrop-blur-sm">
+          <form onSubmit={handleTextSubmit} className="relative">
             <input
               type="text"
               name="textInput"
               placeholder="Type your message..."
-              className="flex-1 px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+              className="w-full pr-24 pl-5 py-4 border border-gray-200 rounded-full focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent text-gray-900 bg-white transition-all duration-200"
               disabled={isProcessing || isListening || isRecording}
             />
             <button
               type="submit"
-              className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50"
+              className="absolute right-16 top-1/2 -translate-y-1/2 px-4 py-1.5 bg-purple-600 text-white rounded-full text-sm font-medium hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500 disabled:opacity-50 transition-colors"
               disabled={isProcessing || isListening || isRecording}
             >
               Send
             </button>
           </form>
           
-          <div className="mt-4 flex justify-center">
+          <div className="mt-6 flex justify-center">
             <button
               type="button"
               onClick={toggleListening}
               disabled={!isMicrophoneAvailable || isProcessing || isRecording}
-              className={`flex items-center justify-center w-12 h-12 rounded-full ${
-                isListening ? 'bg-red-500' : 'bg-indigo-600'
-              } text-white focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-colors`}
+              className={`flex items-center justify-center w-16 h-16 rounded-full ${
+                isListening 
+                  ? 'bg-red-500 shadow-lg shadow-red-200 transform scale-110' 
+                  : 'bg-gradient-to-r from-purple-600 to-indigo-600 hover:shadow-lg hover:shadow-purple-200 hover:scale-105'
+              } text-white focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500 transition-all duration-300`}
               aria-label={isListening ? 'Stop listening' : 'Start listening'}
             >
               {isListening ? (
@@ -576,8 +572,11 @@ export default function VoiceInterface() {
             </button>
             
             {!isMicrophoneAvailable && (
-              <p className="ml-2 text-sm text-red-600">
-                Microphone access is required for voice input
+              <p className="ml-3 text-sm text-red-600 flex items-center">
+                <svg className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+                Microphone access required
               </p>
             )}
           </div>
