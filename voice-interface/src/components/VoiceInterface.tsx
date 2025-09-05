@@ -482,7 +482,10 @@ export default function VoiceInterface() {
   return (
     <div className={styles.container}>
       <header className={styles.header}>
-        <h1 className={styles.title}>Voice Assistant</h1>
+        <div className={styles.headerContent}>
+          <h1 className={styles.title}>Mitra</h1>
+          <p className={styles.subtitle}>Ram General store's voice assistant</p>
+        </div>
         <div className={styles.controls}>
           <select
             value={selectedLanguage}
